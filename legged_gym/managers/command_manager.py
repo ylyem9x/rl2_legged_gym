@@ -1,0 +1,2 @@
+class CommandManager:
+    pass
