@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from typing import Dict
 from prettytable import PrettyTable
 from legged_gym.data import SimData, RobotData
 from legged_gym.managers.manager_term_cfg import TerminationTerm
@@ -43,7 +44,7 @@ class TerminationManager:
 
     def __str__(self) -> str:
         """Returns: A string representation for termination manager."""
-        msg = f"<TerminationManager> contains {len(self.num_func)} active terms.\n"
+        msg = f"<TerminationManager> contains {self.num_func} active terms.\n"
 
         # create table for term information
         table = PrettyTable()
@@ -100,7 +101,7 @@ class TerminationManager:
 
         return self._truncated_buf | self._terminated_buf
 
-    def reset(self, env_ids) -> dict[str, torch.Tensor]:
+    def reset(self, env_ids) -> Dict[str, torch.Tensor]:
         """Returns the episodic sum of individual reward terms.
 
         Args:

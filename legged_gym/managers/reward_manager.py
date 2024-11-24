@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from typing import Dict
 from prettytable import PrettyTable
 from legged_gym.data import SimData, RobotData
 
@@ -40,7 +41,7 @@ class RewardManager:
 
     def __str__(self) -> str:
         """Returns: A string representation for reward manager."""
-        msg = f"<RewardManager> contains {len(self.num_func)} active terms.\n"
+        msg = f"<RewardManager> contains {self.num_func} active terms.\n"
 
         # create table for term information
         table = PrettyTable()
@@ -76,7 +77,7 @@ class RewardManager:
                 if weight == 0.0:
                     continue
                 # compute term's value
-                value = func(self.sim_data, self.robot_data, args) * weight * self.sim_data.dt
+                value = func(self.sim_data, self.robot_data, args) * weight * self.sim_data.sim.dt
                 # update total reward
                 self._reward_buf += value
                 # update episodic sum
@@ -86,7 +87,7 @@ class RewardManager:
 
         return self._reward_buf
 
-    def reset(self, env_ids) -> dict[str, torch.Tensor]:
+    def reset(self, env_ids) -> Dict[str, torch.Tensor]:
         """Returns the episodic sum of individual reward terms.
 
         Args:

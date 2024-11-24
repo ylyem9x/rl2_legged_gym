@@ -201,6 +201,16 @@ def get_body_indices(gym_env, name):
                                                           this_names[i])
     return indices
 
+def get_default_pos(gym_env, sim_data):
+    gym, robot_asset, envs, actor_handles = gym_env
+    dof_names = gym.get_asset_dof_names(robot_asset)
+    default_dof_pos = torch.zeros(sim_data.num_dofs, dtype=torch.float, device=sim_data.device, requires_grad=False)
+    for i in range(sim_data.num_dofs):
+        name = dof_names[i]
+        angle = sim_data.init_state.default_joint_angles[name]
+        default_dof_pos[i] = angle
+    return default_dof_pos.unsqueeze(0)
+
 class PolicyExporterLSTM(torch.nn.Module):
     def __init__(self, actor_critic):
         super().__init__()

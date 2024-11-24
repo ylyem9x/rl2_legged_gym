@@ -12,17 +12,3 @@ class ManagerBasedRLEnvCfg:
     obs = None
     action = None
     curriculum = None
-
-# example
-class Reward:
-    tracking_linear_vel = RewardTerm()
-    tracking_angular_vel = RewardTerm()
-class Termination:
-    time_out = TerminationTerm()
-# ......
-class cfg(ManagerBasedRLEnvCfg):
-    sim_data = SimData()
-    sim_data.num_envs = 1
-
-    reward = Reward()
-    termination = Termination()

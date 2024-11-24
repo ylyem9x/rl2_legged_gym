@@ -20,6 +20,7 @@ from legged_gym.utils.helpers import class_to_dict
 
 class ManagerBasedRLEnv:
     def __init__(self, cfg: ManagerBasedRLEnvCfg):
+        self.cfg = cfg
         self.sim_data = cfg.sim_data
         self.gym = gymapi.acquire_gym()
         self.create_sim()
@@ -27,12 +28,11 @@ class ManagerBasedRLEnv:
         self.viewer = None
         self.gym.prepare_sim(self.sim)
         self.prepare_viewer_keyboard()
-        if not self.create_sim.headless:
+        if not self.sim_data.headless:
             self._set_camera(self.sim_data.viewer.pos, self.sim_data.viewer.lookat)
 
         self._init_buffers()
         self._load_manager()
-        self.cfg = cfg
 
     def create_sim(self):
         sim_cfg = {"sim":class_to_dict(self.sim_data.sim)}
@@ -70,9 +70,9 @@ class ManagerBasedRLEnv:
         # create some wrapper tensors for different slices
         self.root_state = gymtorch.wrap_tensor(actor_root_state)
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
-        self.dof_pos = self.dof_state.view(self.sim_data.num_envs, self.sim_data.num_dof, 2)[..., 0]
-        self.dof_vel = self.dof_state.view(self.sim_data.num_envs, self.sim_data.num_dof, 2)[..., 1]
-        self.base_quat = self.root_states[:, 3:7]
+        self.dof_pos = self.dof_state.view(self.sim_data.num_envs, self.sim_data.num_dofs, 2)[..., 0]
+        self.dof_vel = self.dof_state.view(self.sim_data.num_envs, self.sim_data.num_dofs, 2)[..., 1]
+        self.base_quat = self.root_state[:, 3:7]
 
         self.contact_force = gymtorch.wrap_tensor(net_contact_force).view(self.sim_data.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
         self.rigid_body_state = gymtorch.wrap_tensor(rigid_body_state)[:self.sim_data.num_envs * self.num_bodies, :]
@@ -84,29 +84,19 @@ class ManagerBasedRLEnv:
     def _load_manager(self):
         self.reward_manager = RewardManager(self.cfg.reward, self.sim_data, self.robot_data)
         print("[INFO] Reward Manager: ", self.reward_manager)
-        self.command_manager = CommandManager(self.cfg.command, self.sim_data, self.robot_data)
-        print("[INFO] command Manager: ", self.command_manager)
-        self.obs_manager = ObservationManager(self.cfg.obs, self.sim_data, self.robot_data)
-        print("[INFO] observation Manager: ", self.obs_manager)
+        # self.command_manager = CommandManager(self.cfg.command, self.sim_data, self.robot_data)
+        # print("[INFO] command Manager: ", self.command_manager)
+        # self.obs_manager = ObservationManager(self.cfg.obs, self.sim_data, self.robot_data)
+        # print("[INFO] observation Manager: ", self.obs_manager)
         self.action_manager = ActionManager(self.cfg.action, self.sim_data, self.robot_data)
         print("[INFO] action Manager: ", self.action_manager)
+        self.termination_manager = TerminationManager(self.cfg.termination, self.sim_data, self.robot_data)
+        print("[INFO] termination Manager: ", self.termination_manager)
+        # self.event_manager = EventManager(self.cfg.event, self.sim_data, self.robot_data)
+        # print("[INFO] event Manager: ", self.event_manager)
+        # self.curriculum_manager = CurriculumManager(self.cfg.curriculum, self.sim_data, self.robot_data)
+        # print("[INFO] command Manager: ", self.curriculum_manager)
 
-        # The following can be None
-        if hasattr(self.cfg, "termination"):
-            self.termination_manager = TerminationManager(self.cfg.termination, self.sim_data, self.robot_data)
-            print("[INFO] termination Manager: ", self.termination_manager)
-        else:
-            self.termination_manager = TerminationManager(None, self.sim_data, self.robot_data)
-        if hasattr(self.cfg, "events"):
-            self.event_manager = EventManager(self.cfg.event, self.sim_data, self.robot_data)
-            print("[INFO] event Manager: ", self.event_manager)
-        else:
-            self.event_manager = EventManager(None, self.sim_data, self.robot_data)
-        if hasattr(self.cfg, "curriculum"):
-            self.curriculum_manager = CurriculumManager(self.cfg.curriculum, self.sim_data, self.robot_data)
-            print("[INFO] command Manager: ", self.curriculum_manager)
-        else:
-            self.curriculum_manager = CurriculumManager(None, self.sim_data, self.robot_data)
 
 
     #--------------- step func ---------------
@@ -133,26 +123,26 @@ class ManagerBasedRLEnv:
 
         # perform physics stepping
         for _ in range(self.sim_data.decimation):
-            self.robot_data.torque = self.action_manager.compute_torque(self.robot_data.action)
-            self.sim_data.gym.set_dof_actuation_force_tensor(self.sim_data.sim, gymtorch.unwrap_tensor(self.robot_data.torque))
-            self.sim_data.gym.simulate(self.sim_data.sim)
+            self.robot_data.torque = self.action_manager.compute_torque(self.robot_data.action).float()
+            self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.robot_data.torque))
+            self.gym.simulate(self.sim)
             if self.sim_data.device == 'cpu':
-                self.sim_data.gym.fetch_results(self.sim, True)
-            self.sim_data.gym.refresh_dof_state_tensor(self.sim)
+                self.gym.fetch_results(self.sim, True)
+            self.gym.refresh_dof_state_tensor(self.sim)
 
         # -- post physics step
-        self.sim_data.gym.refresh_actor_root_state_tensor(self.sim_data.sim)
-        self.sim_data.gym.refresh_net_contact_force_tensor(self.sim_data.sim)
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_net_contact_force_tensor(self.sim)
 
         # -- update env counters
         self.robot_data.episode_length_buf += 1  # step in current episode (per env)
         self.robot_data.common_step_counter += 1  # total step (common for all envs)
 
         # prepare quantities
-        self.robot_data.base_quat[:] = self.robot_data.root_states[:, 3:7]
+        self.robot_data.base_quat[:] = self.robot_data.root_state[:, 3:7]
         self.robot_data.base_lin_vel[:] = quat_rotate_inverse(self.robot_data.base_quat, self.robot_data.root_state[:, 7:10])
         self.robot_data.base_ang_vel[:] = quat_rotate_inverse(self.robot_data.base_quat, self.robot_data.root_state[:, 10:13])
-        self.robot_data.projected_gravity[:] = quat_rotate_inverse(self.robot_data.base_quat, self.sim_data.gravity_vec)
+        self.robot_data.projected_gravity[:] = quat_rotate_inverse(self.robot_data.base_quat, self.robot_data.gravity_vec)
 
         """
         Post physics step callback
@@ -171,15 +161,15 @@ class ManagerBasedRLEnv:
         # self.reset(reset_env_ids)
 
         # -- update command
-        self.command_manager.compute()
+        # self.command_manager.compute()
 
         # -- step interval events
-        if "interval" in self.event_manager.available_modes:
-            self.event_manager.apply(mode="interval", dt=self.step_dt)
+        # if "interval" in self.event_manager.available_modes:
+        #     self.event_manager.apply(mode="interval", dt=self.step_dt)
 
         # -- compute observations
         # note: done after reset to get the correct observations for reset envs
-        self.obs_manager.compute()
+        # self.obs_manager.compute()
 
         # self._draw_debug_vis()
 
@@ -197,8 +187,8 @@ class ManagerBasedRLEnv:
         plane_params.dynamic_friction = self.sim_data.terrain.dynamic_friction
         plane_params.restitution = self.sim_data.terrain.restitution
         self.gym.add_ground(self.sim, plane_params)
-        self.height_samples = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows,
-                                                                            self.terrain.tot_cols).to(self.device)
+        # self.height_samples = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows,
+        #                                                                     self.terrain.tot_cols).to(self.device)
 
     def _create_heightfield(self):
         """ Adds a heightfield terrain to the simulation, sets parameters based on the cfg.
@@ -269,14 +259,14 @@ class ManagerBasedRLEnv:
         asset_options.disable_gravity = self.sim_data.asset.disable_gravity
 
         self.robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
-        self.num_dof = self.gym.get_asset_dof_count(self.robot_asset)
+        self.num_dofs = self.gym.get_asset_dof_count(self.robot_asset)
         self.num_bodies = self.gym.get_asset_rigid_body_count(self.robot_asset)
         dof_props_asset = self.gym.get_asset_dof_properties(self.robot_asset)
         rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(self.robot_asset)
 
-        self.sim_data.num_dof = self.num_dof
+        self.sim_data.num_dofs = self.num_dofs
         self.sim_data.num_bodies = self.num_bodies
-        if self.num_dof != self.sim_data.num_actions:
+        if self.num_dofs != self.sim_data.num_actions:
             print(f"[WARNING]Action num is {self.sim_data.num_actions} != Dof num is {self.num_dof}.")
 
         # save body names from the asset
@@ -285,15 +275,11 @@ class ManagerBasedRLEnv:
         print("Check Body Names: ", body_names)
 
         base_init_state_list = self.sim_data.init_state.pos + self.sim_data.init_state.rot + self.sim_data.init_state.lin_vel + self.sim_data.init_state.ang_vel
-        self.base_init_state = to_torch(base_init_state_list, device=self.device, requires_grad=False)
+        self.base_init_state = to_torch(base_init_state_list, device=self.sim_data.device, requires_grad=False)
         start_pose = gymapi.Transform()
         start_pose.p = gymapi.Vec3(*self.base_init_state[:3])
 
-        self.env_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
-        self.terrain_levels = torch.zeros(self.num_envs, device=self.device, requires_grad=False, dtype=torch.long)
-        self.terrain_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
-        self.terrain_types = torch.zeros(self.num_envs, device=self.device, requires_grad=False, dtype=torch.long)
-        self._call_train_eval(self._get_env_origins, torch.arange(self.num_envs, device=self.device))
+        self._get_env_origins()
         env_lower = gymapi.Vec3(0., 0., 0.)
         env_upper = gymapi.Vec3(0., 0., 0.)
         self.actor_handles = []
@@ -306,7 +292,7 @@ class ManagerBasedRLEnv:
         #     self._call_train_eval(self._randomize_rigid_body_props, torch.arange(self.num_envs, device=self.device))
         #     self._randomize_gravity()
 
-        for i in range(self.num_envs):
+        for i in range(self.sim_data.num_envs):
             # create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.sim_data.num_envs)))
             pos = self.env_origins[i].clone()
@@ -314,18 +300,18 @@ class ManagerBasedRLEnv:
             #                              device=self.device).squeeze(1)
             # pos[1:2] += torch_rand_float(-self.sim_data.terrain.y_init_range, self.sim_data.terrain.y_init_range, (1, 1),
             #                              device=self.device).squeeze(1)
-            pos[:2] += torch_rand_float(-1., 1., (2,1), device=self.device).squeeze(1)
+            pos[:2] += torch_rand_float(-1., 1., (2,1), device=self.sim_data.device).squeeze(1)
             start_pose.p = gymapi.Vec3(*pos)
 
-            rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
-            self.gym.set_asset_rigid_shape_properties(self.robot_asset, rigid_shape_props)
+            # rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
+            # self.gym.set_asset_rigid_shape_properties(self.robot_asset, rigid_shape_props)
             robot_handle = self.gym.create_actor(env_handle, self.robot_asset, start_pose, "robot", i,
                                                   self.sim_data.asset.self_collisions, 0)
-            dof_props = self._process_dof_props(dof_props_asset, i)
-            self.gym.set_actor_dof_properties(env_handle, robot_handle, dof_props)
+            # dof_props = self._process_dof_props(dof_props_asset, i)
+            # self.gym.set_actor_dof_properties(env_handle, robot_handle, dof_props)
             body_props = self.gym.get_actor_rigid_body_properties(env_handle, robot_handle)
-            body_props = self._process_rigid_body_props(body_props, i)
-            self.gym.set_actor_rigid_body_properties(env_handle, robot_handle, body_props, recomputeInertia=True)
+            # body_props = self._process_rigid_body_props(body_props, i)
+            # self.gym.set_actor_rigid_body_properties(env_handle, robot_handle, body_props, recomputeInertia=True)
             self.envs.append(env_handle)
             self.actor_handles.append(robot_handle)
 
@@ -414,7 +400,7 @@ class ManagerBasedRLEnv:
                     self._set_camera(self.camera_pos, self.camera_direction + self.camera_pos)
 
             # fetch results
-            if self.device != 'cpu':
+            if self.sim_data.device != 'cpu':
                 self.gym.fetch_results(self.sim, True)
             # step graphics
             if self.enable_viewer_sync:
@@ -446,8 +432,8 @@ class ManagerBasedRLEnv:
             self.theta = 0.0
             self.camera_direction = np.array([np.cos(self.theta), np.sin(self.theta), 0.])
             self.camera_direction2 = np.array([np.cos(self.theta + 0.5 * np.pi), np.sin(self.theta + 0.5 * np.pi), 0.])
-            self.camera_pos = np.array(self.sim_data.viewer.pos)
-            self.camera_lookat = np.array(self.sim_data.viewer.lookat)
+            self.camera_pos = np.array(self.sim_data.viewer.pos, dtype=float)
+            self.camera_lookat = np.array(self.sim_data.viewer.lookat, dtype=float)
 
     def _set_camera(self,pos,lookat):
         cam_pos = gymapi.Vec3(*pos)

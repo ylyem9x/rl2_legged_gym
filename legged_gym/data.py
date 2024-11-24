@@ -8,7 +8,7 @@ import torch
 from torch import Tensor
 from typing import Tuple, Dict
 
-from legged_gym.utils.helpers import get_body_indices
+from legged_gym.utils.helpers import get_body_indices, get_default_pos
 
 """contain all tensor and array that need
 """
@@ -18,6 +18,7 @@ class SimData:
     """
     class sim:
         """will be parse into gymapi.simParams()"""
+        use_gpu_pipeline = True
         dt =  0.005
         substeps = 1
         gravity = [0., 0. ,-9.81]  # [m/s^2]
@@ -39,7 +40,7 @@ class SimData:
     # viewer camera:
     class viewer:
         ref_env = 0
-        pos = [10, 0, 6]  # [m]
+        pos = [10., 0., 3.]  # [m]
         lookat = [11., 5, 3.]  # [m]
 
     class terrain:
@@ -69,9 +70,9 @@ class SimData:
         # slope_treshold = 0.75 # slopes above this threshold will be corrected to vertical surfaces
 
     class asset:
-        file = ""
-        name = "legged_robot"  # actor name
-        foot_name = "None" # name of the feet bodies, used to index body state and contact force tensors
+        file = "resources/robots/go1/urdf/go1.urdf"
+        name = "go1"  # actor name
+        foot_name = "foot" # name of the feet bodies, used to index body state and contact force tensors
         penalize_contacts_on = []
         terminate_after_contacts_on = []
         disable_gravity = False
@@ -90,20 +91,43 @@ class SimData:
         armature = 0.
         thickness = 0.01
 
+    class init_state:
+        pos = [0.0, 0.0, 0.32]  # x,y,z [m]
+        rot = [0.0, 0.0, 0.0, 1.0]  # x,y,z,w [quat]
+        lin_vel = [0.0, 0.0, 0.0]  # x,y,z [m/s]
+        ang_vel = [0.0, 0.0, 0.0]  # x,y,z [rad/s]
+        # target angles when action = 0.0
+        default_joint_angles = {  # = target angles [rad] when action = 0.0
+        'FL_hip_joint': 0.1,  # [rad]
+        'RL_hip_joint': 0.1,  # [rad]
+        'FR_hip_joint': -0.1,  # [rad]
+        'RR_hip_joint': -0.1,  # [rad]
+
+        'FL_thigh_joint': 0.8,  # [rad]
+        'RL_thigh_joint': 1.,  # [rad]
+        'FR_thigh_joint': 0.8,  # [rad]
+        'RR_thigh_joint': 1.,  # [rad]
+
+        'FL_calf_joint': -1.5,  # [rad]
+        'RL_calf_joint': -1.5,  # [rad]
+        'FR_calf_joint': -1.5,  # [rad]
+        'RR_calf_joint': -1.5  # [rad]
+        }
+
     device = "cuda:0"
     sim_device_id = 0
-    use_gpu_pipeline = False
+
     headless = False
 
     up_axis_idx = 2 # 2 for z, 1 for y -> adapt gravity accordingly
     decimation = 4
 
-    num_envs = 4096
+    num_envs = 256
     num_bodies = None # read from urdf
-    num_dof = None # read from urdf
-    num_actions = 0
+    num_dofs = None # read from urdf
+    num_actions = 12
     max_episode_length_s = 1
-    default_dof_pos = None
+
 
 
 class RobotData:
@@ -113,17 +137,19 @@ class RobotData:
         torch._C._jit_set_profiling_mode(False)
         torch._C._jit_set_profiling_executor(False)
 
+        # update directly from gym
+        self.root_state, self.dof_state, self.dof_pos, self.dof_vel, \
+        self.base_quat, self.contact_force, self.rigid_body_state = gym_tensor
+
         # fixed data
         self.gravity_vec = to_torch(get_axis_params(-1., sim_data.up_axis_idx), device=sim_data.device).repeat((sim_data.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=sim_data.device).repeat((sim_data.num_envs, 1))
+        self.default_dof_pos = get_default_pos(gym_env, sim_data) # in size(1,num_dofs)
         # get indices
         self.feet_indices = get_body_indices(gym_env, sim_data.asset.foot_name).to(sim_data.device)
         self.penalised_contact_indices = get_body_indices(gym_env, sim_data.asset.penalize_contacts_on).to(sim_data.device)
         self.termination_contact_indices = get_body_indices(gym_env, sim_data.asset.terminate_after_contacts_on).to(sim_data.device)
 
-        # update directly from gym
-        self.root_state, self.dof_state, self.dof_pos, self.dof_vel, \
-        self.base_quat, self.contact_force, self.rigid_body_state = gym_tensor
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_state[:, 10:13])
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_state[:, 7:10])
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
@@ -160,8 +186,8 @@ class RobotData:
 
         # domain random
         self.lag_buffer = None # available on pd/T control
-        self.p_gain = None
-        self.d_gain = None
-        self.motor_offset = None # only on pd control
-        self.motor_strength = None
+        self.p_gain = 1.0
+        self.d_gain = 1.0
+        self.motor_offset = 0.0 # only on pd control
+        self.motor_strength = 1.0
         self.noise_scale_vec = None

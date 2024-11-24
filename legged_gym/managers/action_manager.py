@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from typing import Dict
 from prettytable import PrettyTable
 from legged_gym.data import SimData, RobotData
 from legged_gym.managers.manager_term_cfg import ActionComputeTerm, ActionSacleTerm
@@ -26,10 +27,10 @@ class ActionManager:
         self.cfg = cfg
         self.sim_data = sim_data
         self.robot_data = robot_data
-        self.terms = self._prepare_terms()
         self.action_scale = None
         self.clip_params = None
         self.control_type = None
+        self.terms = self._prepare_terms()
 
     def __str__(self) -> str:
         """Returns: A string representation for action scale."""
@@ -43,7 +44,8 @@ class ActionManager:
         table.align["dof id"] = "l"
         # add info on each term
         for i in range(self.sim_data.num_actions):
-            table.add_row([i, self.action_scale[i], self.clip_params[i]])
+            table.add_row([i, self.action_scale[i].detach().cpu().numpy(), 
+                           self.clip_params[i].detach().cpu().numpy()])
         # convert table to string
         msg += table.get_string()
         msg += "\n"
@@ -68,8 +70,9 @@ class ActionManager:
         action_scaled = action * self.action_scale
 
         if self.control_type == "P":
-            self.robot_data.lag_buffer = self.robot_data.lag_buffer[1:] + [action_scaled.clone()]
-            self.joint_pos_target = self.robot_data.lag_buffer[0] + self.sim_data.default_dof_pos
+            # self.robot_data.lag_buffer = self.robot_data.lag_buffer[1:] + [action_scaled.clone()]
+            # self.joint_pos_target = self.robot_data.lag_buffer[0] + self.sim_data.default_dof_pos
+            self.joint_pos_target = action_scaled + self.robot_data.default_dof_pos
             torque = self.robot_data.p_gain * self.kp * (
                     self.joint_pos_target - self.robot_data.dof_pos + self.robot_data.motor_offset) \
                     - self.robot_data.d_gain * self.kd * self.robot_data.dof_vel
@@ -118,7 +121,7 @@ class ActionManager:
         """process term data. A number or list is available."""
         if isinstance(data, float) or isinstance(data, int):
             tensor = torch.ones(self.sim_data.num_actions, device=self.sim_data.device,
-                                dtype=torch.float) * data
+                                dtype=torch.float32) * data
         elif len(data) == self.sim_data.num_actions:
             tensor = torch.from_numpy(np.array(data)).to(self.sim_data.device)
         else:
