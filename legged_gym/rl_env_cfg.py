@@ -3,7 +3,7 @@ from legged_gym.data import SimData, RobotData
 from legged_gym.managers.manager_term_cfg import *
 
 class ManagerBasedRLEnvCfg:
-    sim_data: SimData = None
+    sim_data = SimData()
     # robot_data: RobotData = None
     reward = None
     termination = None

@@ -1,7 +1,7 @@
 import numpy as np
 # ---------- Reward Manager Term ----------
 class RewardTerm:
-    def __init__(self, func, weight, cfg: dict = None):
+    def __init__(self, func, weight, cfg = dict()):
         """
         Args:
             func: function for computing reward. input: (sim_data, robot_data, args). return torch.Tensor
@@ -34,7 +34,7 @@ class RewardComputeFunc:
 
 # ---------- Termination Manager Term ----------
 class TerminationTerm:
-    def __init__(self, func, time_out = False, cfg: dict = None):
+    def __init__(self, func, time_out = False, cfg = dict()):
         """
         Args:
             func: function for computing termination. input: (sim_data, robot_data, args). return torch.Tensor
@@ -47,12 +47,12 @@ class TerminationTerm:
 
 # ---------- Action Manager Term ----------
 class ActionSacleTerm:
-    def __init__(self, scale, clip):
+    def __init__(self, scale, clip = 100.0):
         self.scale = scale
         self.clip = clip
 
 class ActionComputeTerm:
-    def __init__(self, control_type, kp = None, kd = None, func = None):
+    def __init__(self, control_type, kp = None, kd = None, lag = 1, func = None):
         """
         control_type: "P", "T", "other"
 
@@ -63,17 +63,37 @@ class ActionComputeTerm:
         self.control_type = control_type
         self.kp = kp
         self.kd = kd
+        self.lag = lag
         self.func = func
+
+# ---------- Observation Term ----------
+class ObservationTerm:
+    def __init__(self, func, noise = None, clip = 100.0, scale = 1.0, cfg = dict()):
+        self.func = func
+        self.scale = scale
+        self.noise = noise # call to noise obs
+        self.clip = clip
+        self.cfg = cfg
+
+class ObservationGroup:
+    def __init__(self, *args, concatenate_terms: bool = True):
+        self.concatenate_terms = concatenate_terms
+        term: ObservationTerm
+        for term in args:
+            setattr(self, term.func.__name__, term)
 
 # ---------- Event Manager Term ----------
 class EventTerm:
-    def __init__(self, func, cfg = None):
+    def __init__(self, func, mode, interval = {"global":15, "local":-1}, trigger = None, cfg = dict()):
         self.func = func
-        self.cfg = cfg
+        self.mode = mode # "startup", "reset", "interval", "trigger"
+        self.interval = interval
+        self.trigger = trigger
+        self.cfg = cfg # for interval: global for all env, local will input env_ids
 
 # ---------- Curriculum Manager Term ----------
 class CurriculumTerm:
-    def __init__(self, func, cfg = None):
+    def __init__(self, func, cfg = dict()):
         self.func = func
         self.cfg = cfg
 

@@ -39,7 +39,7 @@ class TerminationManager:
             self._term_done[func.__name__] = torch.zeros(sim_data.num_envs,
                                                         dtype=torch.bool, device=sim_data.device)
         # create buffer for managing termination per environment
-        self._truncated_buf = torch.zeros(self.sim_data.num_envs, device=self.sim_data.device, dtype=torch.bool) # time_out
+        self._truncated_buf = torch.ones(self.sim_data.num_envs, device=self.sim_data.device, dtype=torch.bool) # time_out
         self._terminated_buf = torch.zeros_like(self._truncated_buf) # Fall
 
     def __str__(self) -> str:
@@ -102,15 +102,6 @@ class TerminationManager:
         return self._truncated_buf | self._terminated_buf
 
     def reset(self, env_ids) -> Dict[str, torch.Tensor]:
-        """Returns the episodic sum of individual reward terms.
-
-        Args:
-            env_ids: The environment ids for which the episodic sum of
-                individual reward terms is to be returned. Defaults to all the environment ids.
-
-        Returns:
-            Dictionary of episodic sum of individual reward terms.
-        """
         # resolve environment ids
         if env_ids is None:
             env_ids = slice(None)
@@ -120,6 +111,7 @@ class TerminationManager:
             extras["Episode_Termination/" + key] = torch.count_nonzero(self._term_done[key][env_ids]).item()
             # reset episodic sum
             self._term_done[key][env_ids] = False
+        self.robot_data.episode_length_buf[env_ids] *= 0
         # return logged information
         return extras
 

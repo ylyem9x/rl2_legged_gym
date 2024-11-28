@@ -13,7 +13,7 @@ from typing import Tuple, Dict
 
 from legged_gym.data import SimData, RobotData
 from legged_gym.rl_env_cfg import ManagerBasedRLEnvCfg
-from legged_gym.utils.terrain import Terrain
+# from legged_gym.utils.terrain import Terrain
 from legged_gym.managers import RewardManager, TerminationManager, CommandManager, \
                                 EventManager, ObservationManager, ActionManager, CurriculumManager
 from legged_gym.utils.helpers import class_to_dict
@@ -46,7 +46,8 @@ class ManagerBasedRLEnv:
         self.sim = self.gym.create_sim(self.sim_device_id, self.graphics_device_id, gymapi.SIM_PHYSX, self.sim_params)
         mesh_type = self.sim_data.terrain.mesh_type
         if mesh_type in ['heightfield', 'trimesh']:
-            self.terrain = Terrain(self.sim_data.terrain, self.sim_data.num_envs)
+            # self.terrain = Terrain(self.sim_data.terrain, self.sim_data.num_envs)
+            pass
         if mesh_type=='plane':
             self._create_ground_plane()
         elif mesh_type=='heightfield':
@@ -79,25 +80,29 @@ class ManagerBasedRLEnv:
 
         gym_tensor = (self.root_state, self.dof_state, self.dof_pos, self.dof_vel, self.base_quat, self.contact_force, self.rigid_body_state)
         gym_env = (self.gym, self.robot_asset, self.envs, self.actor_handles)
-        self.robot_data = RobotData(self.sim_data, gym_tensor, gym_env)
+        extra_gym_info = dict()
+        extra_gym_info["base_init_state"] = self.base_init_state
+        extra_gym_info["env_origins"] = self.env_origins
+        self.robot_data = RobotData(self.sim_data, gym_tensor, gym_env, extra_gym_info)
 
     def _load_manager(self):
+        self.termination_manager = TerminationManager(self.cfg.termination, self.sim_data, self.robot_data)
+        print("[INFO] termination Manager: ", self.termination_manager)
         self.reward_manager = RewardManager(self.cfg.reward, self.sim_data, self.robot_data)
         print("[INFO] Reward Manager: ", self.reward_manager)
         # self.command_manager = CommandManager(self.cfg.command, self.sim_data, self.robot_data)
         # print("[INFO] command Manager: ", self.command_manager)
-        # self.obs_manager = ObservationManager(self.cfg.obs, self.sim_data, self.robot_data)
-        # print("[INFO] observation Manager: ", self.obs_manager)
+        self.obs_manager = ObservationManager(self.cfg.obs, self.sim_data, self.robot_data)
+        print("[INFO] observation Manager: ", self.obs_manager)
         self.action_manager = ActionManager(self.cfg.action, self.sim_data, self.robot_data)
         print("[INFO] action Manager: ", self.action_manager)
-        self.termination_manager = TerminationManager(self.cfg.termination, self.sim_data, self.robot_data)
-        print("[INFO] termination Manager: ", self.termination_manager)
-        # self.event_manager = EventManager(self.cfg.event, self.sim_data, self.robot_data)
-        # print("[INFO] event Manager: ", self.event_manager)
+        self.event_manager = EventManager(self.cfg.event, self.sim_data, self.robot_data)
+        print("[INFO] event Manager: ", self.event_manager)
         # self.curriculum_manager = CurriculumManager(self.cfg.curriculum, self.sim_data, self.robot_data)
         # print("[INFO] command Manager: ", self.curriculum_manager)
 
-
+        # apply startup term in event manager
+        self.event_manager.apply_startup_terms()
 
     #--------------- step func ---------------
     def step(self, action: torch.Tensor):
@@ -158,24 +163,48 @@ class ManagerBasedRLEnv:
 
         # -- reset envs that terminated/timed-out and log the episode information
         reset_env_ids = self.robot_data.reset_buf.nonzero(as_tuple=False).squeeze(-1)
-        # self.reset(reset_env_ids)
+        if len(reset_env_ids) > 0:
+            self.reset(reset_env_ids)
 
         # -- update command
         # self.command_manager.compute()
 
-        # -- step interval events
-        # if "interval" in self.event_manager.available_modes:
-        #     self.event_manager.apply(mode="interval", dt=self.step_dt)
+        # -- step interval&tirgger events
+        self.event_manager.apply()
 
         # -- compute observations
         # note: done after reset to get the correct observations for reset envs
-        # self.obs_manager.compute()
+        self.robot_data.obs = self.obs_manager.compute()
 
         # self._draw_debug_vis()
+        return self.robot_data.obs, self.reward_buf, self.robot_data.reset_buf, self.robot_data.extras
+
+    def reset(self, env_ids):
+        # self.curriculum_manager.compute(env_idx = env_idx)
+        self.robot_data.extras["log"] = dict()
+        info = self.reward_manager.reset(env_ids)
+        self.robot_data.extras["log"].update(info)
+        info = self.action_manager.reset(env_ids)
+        self.robot_data.extras["log"].update(info)
+        info = self.termination_manager.reset(env_ids)
+        self.robot_data.extras["log"].update(info)
+        info = self.event_manager.reset(env_ids)
+        self.robot_data.extras["log"].update(info)
+        info = self.obs_manager.reset(env_ids)
+        self.robot_data.extras["log"].update(info)
+        self._reset_robots(env_ids)
+
+    def _reset_robots(self, env_ids):
+        """reset func, dof_state/root_state is reseted by event manager"""
+        env_ids_int32 = env_ids.to(dtype = torch.int32)
+        self.gym.set_dof_state_tensor_indexed(self.sim,
+                                              gymtorch.unwrap_tensor(self.dof_state),
+                                              gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+        self.gym.set_actor_root_state_tensor_indexed(self.sim,
+                                                     gymtorch.unwrap_tensor(self.root_state),
+                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
 
 
-    def reset(self):
-        pass
 
     # ---------- creater function ----------
     def _create_ground_plane(self):
@@ -261,8 +290,6 @@ class ManagerBasedRLEnv:
         self.robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
         self.num_dofs = self.gym.get_asset_dof_count(self.robot_asset)
         self.num_bodies = self.gym.get_asset_rigid_body_count(self.robot_asset)
-        dof_props_asset = self.gym.get_asset_dof_properties(self.robot_asset)
-        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(self.robot_asset)
 
         self.sim_data.num_dofs = self.num_dofs
         self.sim_data.num_bodies = self.num_bodies
@@ -271,7 +298,6 @@ class ManagerBasedRLEnv:
 
         # save body names from the asset
         body_names = self.gym.get_asset_rigid_body_names(self.robot_asset)
-        # self.dof_names = self.gym.get_asset_dof_names(self.robot_asset)
         print("Check Body Names: ", body_names)
 
         base_init_state_list = self.sim_data.init_state.pos + self.sim_data.init_state.rot + self.sim_data.init_state.lin_vel + self.sim_data.init_state.ang_vel
@@ -285,33 +311,18 @@ class ManagerBasedRLEnv:
         self.actor_handles = []
         self.envs = []
 
-        # self.default_friction = rigid_shape_props_asset[0].friction
-        # self.default_restitution = rigid_shape_props_asset[0].restitution
-        # self._init_custom_buffers__()
-        # if not self.eval:
-        #     self._call_train_eval(self._randomize_rigid_body_props, torch.arange(self.num_envs, device=self.device))
-        #     self._randomize_gravity()
-
         for i in range(self.sim_data.num_envs):
             # create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.sim_data.num_envs)))
             pos = self.env_origins[i].clone()
-            # pos[0:1] += torch_rand_float(-self.sim_data.terrain.x_init_range, self.sim_data.terrain.x_init_range, (1, 1),
-            #                              device=self.device).squeeze(1)
-            # pos[1:2] += torch_rand_float(-self.sim_data.terrain.y_init_range, self.sim_data.terrain.y_init_range, (1, 1),
-            #                              device=self.device).squeeze(1)
             pos[:2] += torch_rand_float(-1., 1., (2,1), device=self.sim_data.device).squeeze(1)
             start_pose.p = gymapi.Vec3(*pos)
 
-            # rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
-            # self.gym.set_asset_rigid_shape_properties(self.robot_asset, rigid_shape_props)
             robot_handle = self.gym.create_actor(env_handle, self.robot_asset, start_pose, "robot", i,
                                                   self.sim_data.asset.self_collisions, 0)
             # dof_props = self._process_dof_props(dof_props_asset, i)
             # self.gym.set_actor_dof_properties(env_handle, robot_handle, dof_props)
             body_props = self.gym.get_actor_rigid_body_properties(env_handle, robot_handle)
-            # body_props = self._process_rigid_body_props(body_props, i)
-            # self.gym.set_actor_rigid_body_properties(env_handle, robot_handle, body_props, recomputeInertia=True)
             self.envs.append(env_handle)
             self.actor_handles.append(robot_handle)
 
@@ -382,20 +393,20 @@ class ManagerBasedRLEnv:
                 if evt.action == 's' and evt.value > 0:
                     self.camera_pos -= 2.0 *  self.camera_direction
                     self._set_camera(self.camera_pos, self.camera_direction + self.camera_pos)
-                if evt.action == 'q' and evt.value > 0:
+                if evt.action == 'e' and evt.value > 0:
                     self.theta -= 0.1
                     self.camera_direction = np.array([np.cos(self.theta), np.sin(self.theta), 0.])
                     self.camera_direction2 = np.array([np.cos(self.theta + 0.5 * np.pi), np.sin(self.theta + 0.5 * np.pi), 0.])
                     self._set_camera(self.camera_pos, self.camera_direction + self.camera_pos)
-                if evt.action == 'e' and evt.value > 0:
+                if evt.action == 'q' and evt.value > 0:
                     self.theta += 0.1
                     self.camera_direction = np.array([np.cos(self.theta), np.sin(self.theta), 0.])
                     self.camera_direction2 = np.array([np.cos(self.theta + 0.5 * np.pi), np.sin(self.theta + 0.5 * np.pi), 0.])
                     self._set_camera(self.camera_pos, self.camera_direction + self.camera_pos)
-                if evt.action == 'a' and evt.value > 0:
+                if evt.action == 'd' and evt.value > 0:
                     self.camera_pos -= 2.0 * self.camera_direction2
                     self._set_camera(self.camera_pos, self.camera_direction + self.camera_pos)
-                if evt.action == 'd' and evt.value > 0:
+                if evt.action == 'a' and evt.value > 0:
                     self.camera_pos += 2.0 *  self.camera_direction2
                     self._set_camera(self.camera_pos, self.camera_direction + self.camera_pos)
 

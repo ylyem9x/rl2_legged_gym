@@ -30,7 +30,7 @@ class ActionManager:
         self.action_scale = None
         self.clip_params = None
         self.control_type = None
-        self.terms = self._prepare_terms()
+        self._prepare_terms()
 
     def __str__(self) -> str:
         """Returns: A string representation for action scale."""
@@ -44,7 +44,7 @@ class ActionManager:
         table.align["dof id"] = "l"
         # add info on each term
         for i in range(self.sim_data.num_actions):
-            table.add_row([i, self.action_scale[i].detach().cpu().numpy(), 
+            table.add_row([i, self.action_scale[i].detach().cpu().numpy(),
                            self.clip_params[i].detach().cpu().numpy()])
         # convert table to string
         msg += table.get_string()
@@ -60,6 +60,7 @@ class ActionManager:
     def process_action(self, action: torch.Tensor):
         # return cliped action
         # scale is not applied here because the cliped action is observation
+        self.robot_data.last_action = self.robot_data.action
         if action.shape[1] == self.sim_data.num_actions:
             action_cliped = torch.clip(action, -self.clip_params, self.clip_params)
         else:
@@ -68,22 +69,26 @@ class ActionManager:
 
     def compute_torque(self, action: torch.Tensor):
         action_scaled = action * self.action_scale
-
+        self.robot_data.lag_buffer = self.robot_data.lag_buffer[1:] + [action_scaled.clone()]
+        target = self.robot_data.lag_buffer[0]
         if self.control_type == "P":
-            # self.robot_data.lag_buffer = self.robot_data.lag_buffer[1:] + [action_scaled.clone()]
-            # self.joint_pos_target = self.robot_data.lag_buffer[0] + self.sim_data.default_dof_pos
-            self.joint_pos_target = action_scaled + self.robot_data.default_dof_pos
+            self.joint_pos_target = target + self.robot_data.default_dof_pos
             torque = self.robot_data.p_gain * self.kp * (
                     self.joint_pos_target - self.robot_data.dof_pos + self.robot_data.motor_offset) \
                     - self.robot_data.d_gain * self.kd * self.robot_data.dof_vel
         elif self.control_type == "T":
-            self.robot_data.lag_buffer = self.robot_data.lag_buffer[1:] + [action_scaled.clone()]
-            torque = self.robot_data.lag_buffer[0]
+            torque = target
         elif self.control_type == "other":
-            torque = self.compute_func(self.sim_data, self.robot_data, action_scaled)
+            torque = self.compute_func(self.sim_data, self.robot_data, target)
 
         torque = torque * self.robot_data.motor_strength
         return torque
+
+    def reset(self, env_ids) -> Dict[str, torch.Tensor]:
+        self.robot_data.last_action[env_ids] *= 0
+        self.robot_data.action[env_ids] *= 0
+        self.robot_data.torque[env_ids] *= 0
+        return {}
 
     """
     Helper functions.
@@ -109,6 +114,7 @@ class ActionManager:
         compute_term: ActionComputeTerm = getattr(self.cfg, compute_members[0])
 
         self.control_type = compute_term.control_type
+        self.robot_data.lag_buffer = [torch.zeros_like(self.robot_data.action) for i in range(compute_term.lag)]
         if compute_term.control_type == "P":
             self.kp = self._prepare_terms_data_into_tensor(compute_term.kp, "Kp")
             self.kd = self._prepare_terms_data_into_tensor(compute_term.kd, "Kd")

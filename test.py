@@ -1,13 +1,13 @@
-import numpy as np
+class A:
+    def __init__(self):
+        pass
+    def call_func(self, func):
+        func(self.print1)
+    def print1(self,num):
+        print(num)
 
-class a:
-    class b:
-        c = 1
+def func(Afun):
+    Afun(2)
 
-A = a
-A.b.c=2
-B = a.b
-B= A.b
-print(B.c)
-B.c = 3
-print(A.b.c)
+a = A()
+a.call_func(func = func)

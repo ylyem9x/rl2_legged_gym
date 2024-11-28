@@ -70,7 +70,7 @@ class SimData:
         # slope_treshold = 0.75 # slopes above this threshold will be corrected to vertical surfaces
 
     class asset:
-        file = "resources/robots/go1/urdf/go1.urdf"
+        file = "resources/robots/go1/urdf/go1_v2.urdf"
         name = "go1"  # actor name
         foot_name = "foot" # name of the feet bodies, used to index body state and contact force tensors
         penalize_contacts_on = []
@@ -133,46 +133,47 @@ class SimData:
 class RobotData:
     """changeable in sim
     """
-    def __init__(self, sim_data: SimData, gym_tensor, gym_env):
+    def __init__(self, sim_data: SimData, gym_tensor, gym_env, extra_gym_info):
         torch._C._jit_set_profiling_mode(False)
         torch._C._jit_set_profiling_executor(False)
 
         # update directly from gym
         self.root_state, self.dof_state, self.dof_pos, self.dof_vel, \
         self.base_quat, self.contact_force, self.rigid_body_state = gym_tensor
+        self.gym_env = gym_env # (self.gym, self.robot_asset, self.envs, self.actor_handles)
+        self.extra_gym_info = extra_gym_info #
 
         # fixed data
         self.gravity_vec = to_torch(get_axis_params(-1., sim_data.up_axis_idx), device=sim_data.device).repeat((sim_data.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=sim_data.device).repeat((sim_data.num_envs, 1))
         self.default_dof_pos = get_default_pos(gym_env, sim_data) # in size(1,num_dofs)
+        self.env_origins = self.extra_gym_info["env_origins"] # in size(num_envs, 3)
         # get indices
         self.feet_indices = get_body_indices(gym_env, sim_data.asset.foot_name).to(sim_data.device)
         self.penalised_contact_indices = get_body_indices(gym_env, sim_data.asset.penalize_contacts_on).to(sim_data.device)
         self.termination_contact_indices = get_body_indices(gym_env, sim_data.asset.terminate_after_contacts_on).to(sim_data.device)
 
+        # sim
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_state[:, 10:13])
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_state[:, 7:10])
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
+        self.last_dof_vel = torch.zeros_like(self.dof_vel)
+        self.last_root_vel = torch.zeros_like(self.root_state[:, 7:13])
 
         # log
         self.common_step_counter = 0
-        self.episode_length_buf = 0
+        self.episode_length_buf = torch.zeros(sim_data.num_envs, dtype=torch.int, device=sim_data.device, requires_grad=False)
         self.extras = {}
 
         # action
+        self.lag_buffer = None # available on pd/T control
         self.torque = torch.zeros(sim_data.num_envs, sim_data.num_actions, dtype=torch.float, device=sim_data.device, requires_grad=False)
         self.action = torch.zeros(sim_data.num_envs, sim_data.num_actions, dtype=torch.float, device=sim_data.device, requires_grad=False)
-
-        # record data
         self.last_action = torch.zeros(sim_data.num_envs, sim_data.num_actions, dtype=torch.float, device=sim_data.device, requires_grad=False)
-        self.last_dof_vel = torch.zeros_like(self.dof_vel)
-        self.last_root_vel = torch.zeros_like(self.root_state[:, 7:13])
 
         # command
         self.command = None
         self.command_scale = None
-        self.feet_air_time = None
-        self.last_contact = None
 
         # # terrain
         # if self.cfg.terrain.measure_heights:
@@ -185,9 +186,11 @@ class RobotData:
         self.reset_time_out = None
 
         # domain random
-        self.lag_buffer = None # available on pd/T control
         self.p_gain = 1.0
         self.d_gain = 1.0
         self.motor_offset = 0.0 # only on pd control
         self.motor_strength = 1.0
         self.noise_scale_vec = None
+
+        # obs
+        self.obs = None
