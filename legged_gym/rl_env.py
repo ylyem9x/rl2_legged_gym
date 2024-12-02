@@ -46,8 +46,7 @@ class ManagerBasedRLEnv:
         self.sim = self.gym.create_sim(self.sim_device_id, self.graphics_device_id, gymapi.SIM_PHYSX, self.sim_params)
         mesh_type = self.sim_data.terrain.mesh_type
         if mesh_type in ['heightfield', 'trimesh']:
-            # self.terrain = Terrain(self.sim_data.terrain, self.sim_data.num_envs)
-            pass
+            self.terrain = Terrain(self.sim_data.terrain, self.sim_data.num_envs)
         if mesh_type=='plane':
             self._create_ground_plane()
         elif mesh_type=='heightfield':
@@ -86,20 +85,20 @@ class ManagerBasedRLEnv:
         self.robot_data = RobotData(self.sim_data, gym_tensor, gym_env, extra_gym_info)
 
     def _load_manager(self):
+        self.event_manager = EventManager(self.cfg.event, self.sim_data, self.robot_data)
+        print("[INFO] event Manager: ", self.event_manager)
         self.termination_manager = TerminationManager(self.cfg.termination, self.sim_data, self.robot_data)
         print("[INFO] termination Manager: ", self.termination_manager)
-        self.reward_manager = RewardManager(self.cfg.reward, self.sim_data, self.robot_data)
-        print("[INFO] Reward Manager: ", self.reward_manager)
-        # self.command_manager = CommandManager(self.cfg.command, self.sim_data, self.robot_data)
-        # print("[INFO] command Manager: ", self.command_manager)
+        # self.curriculum_manager = CurriculumManager(self.cfg.curriculum, self.sim_data, self.robot_data)
+        # print("[INFO] command Manager: ", self.curriculum_manager)
+        self.command_manager = CommandManager(self.cfg.command, self.sim_data, self.robot_data)
+        print("[INFO] command Manager: ", self.command_manager)
         self.obs_manager = ObservationManager(self.cfg.obs, self.sim_data, self.robot_data)
         print("[INFO] observation Manager: ", self.obs_manager)
         self.action_manager = ActionManager(self.cfg.action, self.sim_data, self.robot_data)
         print("[INFO] action Manager: ", self.action_manager)
-        self.event_manager = EventManager(self.cfg.event, self.sim_data, self.robot_data)
-        print("[INFO] event Manager: ", self.event_manager)
-        # self.curriculum_manager = CurriculumManager(self.cfg.curriculum, self.sim_data, self.robot_data)
-        # print("[INFO] command Manager: ", self.curriculum_manager)
+        self.reward_manager = RewardManager(self.cfg.reward, self.sim_data, self.robot_data)
+        print("[INFO] Reward Manager: ", self.reward_manager)
 
         # apply startup term in event manager
         self.event_manager.apply_startup_terms()
@@ -167,7 +166,7 @@ class ManagerBasedRLEnv:
             self.reset(reset_env_ids)
 
         # -- update command
-        # self.command_manager.compute()
+        self.command_manager.apply()
 
         # -- step interval&tirgger events
         self.event_manager.apply()
@@ -183,6 +182,8 @@ class ManagerBasedRLEnv:
         # self.curriculum_manager.compute(env_idx = env_idx)
         self.robot_data.extras["log"] = dict()
         info = self.reward_manager.reset(env_ids)
+        self.robot_data.extras["log"].update(info)
+        info = self.command_manager.reset(env_ids) # after reward
         self.robot_data.extras["log"].update(info)
         info = self.action_manager.reset(env_ids)
         self.robot_data.extras["log"].update(info)
@@ -203,8 +204,6 @@ class ManagerBasedRLEnv:
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                      gymtorch.unwrap_tensor(self.root_state),
                                                      gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
-
-
 
     # ---------- creater function ----------
     def _create_ground_plane(self):

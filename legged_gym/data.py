@@ -126,7 +126,7 @@ class SimData:
     num_bodies = None # read from urdf
     num_dofs = None # read from urdf
     num_actions = 12
-    max_episode_length_s = 1
+    max_episode_length_s = 5
 
 
 
@@ -171,9 +171,12 @@ class RobotData:
         self.action = torch.zeros(sim_data.num_envs, sim_data.num_actions, dtype=torch.float, device=sim_data.device, requires_grad=False)
         self.last_action = torch.zeros(sim_data.num_envs, sim_data.num_actions, dtype=torch.float, device=sim_data.device, requires_grad=False)
 
+        # reward
+        self.reward_weight = dict()
+
         # command
         self.command = None
-        self.command_scale = None
+        self.command_range = None
 
         # # terrain
         # if self.cfg.terrain.measure_heights:

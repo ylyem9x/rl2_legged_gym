@@ -34,9 +34,10 @@ class RewardManager:
         self.computefunc = None
         self._episode_sums = dict()
         self._prepare_terms()
-        for func,_,_ in self.terms:
+        for func,w,_ in self.terms:
             self._episode_sums[func.__name__] = torch.zeros(sim_data.num_envs,
                                                             dtype=torch.float, device=sim_data.device)
+            robot_data.reward_weight[func.__name__] = w
         self._reward_buf = torch.zeros(sim_data.num_envs, dtype=torch.float, device=sim_data.device)
 
     def __str__(self) -> str:

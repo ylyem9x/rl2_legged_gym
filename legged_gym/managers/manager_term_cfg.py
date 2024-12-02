@@ -97,12 +97,10 @@ class CurriculumTerm:
         self.func = func
         self.cfg = cfg
 
-# ---------- RobotData Term -----------
-class RobotDataTerm:
-    def __init__(self, init_func, reset_func, compute_func):
-        self.init_func = init_func
-        self.reset_func = reset_func
-        self.compute_func = compute_func
-        self.data = None
-    def __call__(self):
-        return self.data
+# ---------- Command Manager Term -----------
+class CommandTerm:
+    def __init__(self, dim, func, reset, cfg = dict()):
+        self.dim = dim
+        self.func = func # every dt, keep or resample
+        self.reset = reset # reset extras, can apply curriculum
+        self.cfg = cfg

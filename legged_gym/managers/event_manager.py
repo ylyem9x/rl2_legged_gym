@@ -34,11 +34,6 @@ class EventManager:
     """
 
     def __init__(self, cfg, sim_data: SimData, robot_data: RobotData):
-        """Initialize the action term.
-
-        Args:
-            cfg: The configuration object.
-        """
         self.cfg = cfg
         self.sim_data = sim_data
         self.robot_data = robot_data

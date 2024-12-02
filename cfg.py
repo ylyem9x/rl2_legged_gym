@@ -12,4 +12,4 @@ from legged_gym.envs.base.base import cfg
 env = ManagerBasedRLEnv(cfg)
 
 while True:
-    env.step(torch.zeros(cfg.sim_data.num_envs, cfg.sim_data.num_actions,dtype=torch.float32, device=cfg.sim_data.device, requires_grad=False))
+    obs, reward, reset, extras = env.step(torch.zeros(cfg.sim_data.num_envs, cfg.sim_data.num_actions,dtype=torch.float32, device=cfg.sim_data.device, requires_grad=False))

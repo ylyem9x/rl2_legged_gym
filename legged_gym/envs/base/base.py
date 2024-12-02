@@ -9,16 +9,17 @@ from legged_gym.envs.base import *
 
 
 class Reward:
-    # tracking_lin_vel = RewardTerm(basic_reward.tracking_lin_vel, 1.0, {"sigma":0.25})
-    # tracking_ang_vel = RewardTerm(basic_reward.tracking_ang_vel, 0.5, {"sigma":0.25})
+    tracking_lin_vel = RewardTerm(basic_reward.tracking_lin_vel, 1.0, {"sigma":0.25})
+    tracking_ang_vel = RewardTerm(basic_reward.tracking_ang_vel, 0.5, {"sigma":0.25})
     lin_vel_z = RewardTerm(basic_reward.lin_vel_z, -1.0)
     ang_vel_xy = RewardTerm(basic_reward.ang_vel_xy, -0.05)
 
 ang_vel = ObservationTerm(basic_obs.base_ang_vel, noise=noise.uniform_noise(0.9, 1.1, "scale"), scale=0.25)
 dof_pos = ObservationTerm(basic_obs.dof_pos, noise=noise.uniform_noise(0.9, 1.1, "scale"), scale=1.0)
 lin_vel = ObservationTerm(basic_obs.base_lin_vel, noise=noise.uniform_noise(0.9, 1.1, "scale"), scale=0.25)
+cmd = ObservationTerm(basic_obs.command, scale = 1.0)
 class Observation:
-    obs = ObservationGroup(ang_vel, dof_pos)
+    obs = ObservationGroup(ang_vel, cmd)
     priv_obs = ObservationGroup(lin_vel)
 
 class Event:
@@ -35,9 +36,19 @@ class Action:
     actionscale = ActionSacleTerm(1.0,100.0)
     actioncompute = ActionComputeTerm(control_type="P", kp = 20.0, kd = 0.5)
 
+class Command:
+    cmd = CommandTerm(vel3_command.dim, vel3_command.resample, vel3_command.curriculum_reset,cfg={
+        "interval": 2,
+        "command_range_x": (-1.0, 1.0),
+        "command_range_y": (-1.0, 1.0),
+        "command_range_yaw": (-1.0, 1.0),
+        "dv": 0.2
+    })
+
 cfg = ManagerBasedRLEnvCfg()
 cfg.reward = Reward()
 cfg.obs = Observation()
 cfg.event = Event()
 cfg.termination = Termination()
 cfg.action = Action()
+cfg.command = Command()
