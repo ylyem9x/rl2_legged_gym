@@ -99,7 +99,7 @@ class ObservationManager:
         obs = dict()
         term: ObservationTerm
         for term in terms:
-            this_obs: torch.Tensor = term.func(self.sim_data, self.robot_data, term.cfg)
+            this_obs: torch.Tensor = term.func(self.sim_data, self.robot_data, term.cfg).clone()
             if term.noise != None:
                 this_obs = term.noise(this_obs)
             if term.clip > 0:

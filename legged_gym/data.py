@@ -46,8 +46,8 @@ class SimData:
     class terrain:
         mesh_type = 'plane' # "heightfield" # none, plane, heightfield or trimesh
         env_spacing = 3.0 # only in plane
-        # horizontal_scale = 0.1 # [m]
-        # vertical_scale = 0.005 # [m]
+        horizontal_scale = 0.1 # [m]
+        vertical_scale = 0.005 # [m]
         # border_size = 25 # [m]
         # curriculum = True
         static_friction = 1.0
@@ -73,13 +73,13 @@ class SimData:
         file = "resources/robots/go1/urdf/go1_v2.urdf"
         name = "go1"  # actor name
         foot_name = "foot" # name of the feet bodies, used to index body state and contact force tensors
-        penalize_contacts_on = []
-        terminate_after_contacts_on = []
+        penalize_contacts_on = ["thigh", "calf","hip"]
+        terminate_after_contacts_on = ["base"]
         disable_gravity = False
         collapse_fixed_joints = True # merge bodies connected by fixed joints. Specific fixed joints can be kept by adding " <... dont_collapse="true">
         fix_base_link = False # fixe the base of the robot
         default_dof_drive_mode = 3 # see GymDofDriveModeFlags (0 is none, 1 is pos tgt, 2 is vel tgt, 3 effort)
-        self_collisions = 0 # 1 to disable, 0 to enable...bitwise filter
+        self_collisions = 1 # 1 to disable, 0 to enable...bitwise filter
         replace_cylinder_with_capsule = True # replace collision cylinders with capsules, leads to faster/more stable simulation
         flip_visual_attachments = True # Some .obj meshes must be flipped from y-up to z-up
 
@@ -92,7 +92,7 @@ class SimData:
         thickness = 0.01
 
     class init_state:
-        pos = [0.0, 0.0, 0.32]  # x,y,z [m]
+        pos = [0.0, 0., 0.32]  # x,y,z [m]
         rot = [0.0, 0.0, 0.0, 1.0]  # x,y,z,w [quat]
         lin_vel = [0.0, 0.0, 0.0]  # x,y,z [m/s]
         ang_vel = [0.0, 0.0, 0.0]  # x,y,z [rad/s]
@@ -122,11 +122,11 @@ class SimData:
     up_axis_idx = 2 # 2 for z, 1 for y -> adapt gravity accordingly
     decimation = 4
 
-    num_envs = 256
+    num_envs = 4096
     num_bodies = None # read from urdf
     num_dofs = None # read from urdf
     num_actions = 12
-    max_episode_length_s = 5
+    max_episode_length_s = 20
 
 
 
@@ -196,4 +196,4 @@ class RobotData:
         self.noise_scale_vec = None
 
         # obs
-        self.obs = None
+        self.obs = dict()

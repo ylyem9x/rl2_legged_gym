@@ -8,17 +8,21 @@ class vel3_command:
     def resample(sim_data:SimData, robot_data:RobotData, command, cfg:dict):
         if robot_data.command_range == None:
             robot_data.command_range = []
-            robot_data.command_range.append(cfg.get("command_range_x", (-1.0, 1.0)))
-            robot_data.command_range.append(cfg.get("command_range_y", (-1.0, 1.0)))
-            robot_data.command_range.append(cfg.get("command_range_yaw", (-1.0, 1.0)))
+            robot_data.command_range.append(cfg.get("command_range_x", [-1.0, 1.0]))
+            robot_data.command_range.append(cfg.get("command_range_y", [-1.0, 1.0]))
+            robot_data.command_range.append(cfg.get("command_range_yaw", [-1.0, 1.0]))
         interval = cfg.get("interval", 15) / sim_data.sim.dt
-        env_ids = (robot_data.episode_length_buf % interval == 0).nonzero(as_tuple=False).squeeze(-1)
-        for i in range(3):
-            command[env_ids, i] = torch_rand(robot_data.command_range[i][0], robot_data.command_range[i][1],
-                                            (len(env_ids), 1), device=sim_data.device).squeeze(1)
-        offset = cfg.get("zero_offset", 0.2)
-        command[env_ids, :2] *= (torch.norm(robot_data.command[env_ids, :2], dim=1) > offset).unsqueeze(1)
-        return command
+        env_ids = (robot_data.episode_length_buf % interval == 1).nonzero(as_tuple=False).squeeze(-1)
+        if len(env_ids) > 0:
+            for i in range(3):
+                command[env_ids, i] = torch_rand(robot_data.command_range[i][0], robot_data.command_range[i][1],
+                                                (len(env_ids), 1), device=sim_data.device).squeeze(1)
+            offset = cfg.get("zero_offset", 0.2)
+            command[env_ids, :2] *= (torch.norm(command[env_ids, :2], dim=1) > offset).unsqueeze(1)
+            command[env_ids, 2] *= (torch.abs(command[env_ids, 2]) > offset)
+            return command
+        else:
+            return command
 
     def fixed_reset(sim_data:SimData, robot_data:RobotData, env_ids, cfg:dict):
         return {}

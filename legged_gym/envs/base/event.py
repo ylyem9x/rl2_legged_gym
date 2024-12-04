@@ -24,7 +24,7 @@ class basic_event:
             "random_vel_range": float
         """
         base_init_state = robot_data.extra_gym_info["base_init_state"]
-        vel_range = cfg.get("random_vel_range", 0.5)
+        vel_range = cfg.get("random_vel_range", 0.0)
         if sim_data.terrain.mesh_type != "plane":
             robot_data.root_state[env_ids] = base_init_state
             robot_data.root_state[env_ids, :3] += robot_data.env_origins[env_ids]
@@ -65,18 +65,15 @@ class basic_event:
         res_lower_limit, res_uppper_limit = cfg.get("restitution",(0.0,0.0))
         rigid_shape_props_asset = gym.get_asset_rigid_shape_properties(robot_asset)
         num_rigid = len(rigid_shape_props_asset)
-        robot_data.friction = torch_rand(fri_lower_limit, fri_uppper_limit, (sim_data.num_envs, num_rigid), device=sim_data.device)
-        robot_data.restitution = torch_rand(res_lower_limit, res_uppper_limit, (sim_data.num_envs, num_rigid), device=sim_data.device)
+        num_buckets = cfg.get("num_buckets", 64)
+        fri_bucketa_ids = torch.randint(0, num_buckets, (sim_data.num_envs, 1))
+        resti_bucket_ids = torch.randint(0, num_buckets, (sim_data.num_envs, 1))
+        friction_bucket = torch_rand(fri_lower_limit, fri_uppper_limit, (num_buckets, num_rigid), device=sim_data.device)
+        resti_bucket = torch_rand(res_lower_limit, res_uppper_limit, (num_buckets, num_rigid), device=sim_data.device)
+        robot_data.friction = friction_bucket[fri_bucketa_ids].squeeze(1)
+        robot_data.restitution = resti_bucket[resti_bucket_ids].squeeze(1)
         for i in range(sim_data.num_envs):
             for s in range(num_rigid):
                 rigid_shape_props_asset[s].friction = robot_data.friction[i, s]
                 rigid_shape_props_asset[s].restitution = robot_data.restitution[i, s]
             gym.set_actor_rigid_shape_properties(envs[i], actor_handles[i], rigid_shape_props_asset)
-
-    def test(sim_data:SimData, robot_data:RobotData, cfg:dict, func):
-        gym, robot_asset, envs, actor_handles = robot_data.gym_env
-        payload_lower_limit, payload_uppper_limit = cfg.get("payload",(0.0,0.0))
-        com_lower_limit, com_uppper_limit = cfg.get("com_displacement",(0.0,0.0))
-        payloads = torch_rand(payload_lower_limit, payload_uppper_limit, (sim_data.num_envs, 1), device=sim_data.device).squeeze(-1)
-        com_displacement = torch_rand(com_lower_limit, com_uppper_limit, (sim_data.num_envs, 3), device=sim_data.device)
-        func()

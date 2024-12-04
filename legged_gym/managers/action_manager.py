@@ -60,7 +60,6 @@ class ActionManager:
     def process_action(self, action: torch.Tensor):
         # return cliped action
         # scale is not applied here because the cliped action is observation
-        self.robot_data.last_action = self.robot_data.action
         if action.shape[1] == self.sim_data.num_actions:
             action_cliped = torch.clip(action, -self.clip_params, self.clip_params)
         else:

@@ -33,6 +33,8 @@ class ManagerBasedRLEnv:
 
         self._init_buffers()
         self._load_manager()
+        self.reset(torch.arange(0, self.sim_data.num_envs, device=self.sim_data.device))
+        self.step(self.robot_data.action) # init some nums
 
     def create_sim(self):
         sim_cfg = {"sim":class_to_dict(self.sim_data.sim)}
@@ -45,8 +47,8 @@ class ManagerBasedRLEnv:
             self.graphics_device_id = self.sim_device_id
         self.sim = self.gym.create_sim(self.sim_device_id, self.graphics_device_id, gymapi.SIM_PHYSX, self.sim_params)
         mesh_type = self.sim_data.terrain.mesh_type
-        if mesh_type in ['heightfield', 'trimesh']:
-            self.terrain = Terrain(self.sim_data.terrain, self.sim_data.num_envs)
+        # if mesh_type in ['heightfield', 'trimesh']:
+        #     self.terrain = Terrain(self.sim_data.terrain, self.sim_data.num_envs)
         if mesh_type=='plane':
             self._create_ground_plane()
         elif mesh_type=='heightfield':
@@ -89,8 +91,6 @@ class ManagerBasedRLEnv:
         print("[INFO] event Manager: ", self.event_manager)
         self.termination_manager = TerminationManager(self.cfg.termination, self.sim_data, self.robot_data)
         print("[INFO] termination Manager: ", self.termination_manager)
-        # self.curriculum_manager = CurriculumManager(self.cfg.curriculum, self.sim_data, self.robot_data)
-        # print("[INFO] command Manager: ", self.curriculum_manager)
         self.command_manager = CommandManager(self.cfg.command, self.sim_data, self.robot_data)
         print("[INFO] command Manager: ", self.command_manager)
         self.obs_manager = ObservationManager(self.cfg.obs, self.sim_data, self.robot_data)
@@ -175,6 +175,11 @@ class ManagerBasedRLEnv:
         # note: done after reset to get the correct observations for reset envs
         self.robot_data.obs = self.obs_manager.compute()
 
+        # post perpare quantities
+        self.robot_data.last_action[:] = self.robot_data.action[:]
+        self.robot_data.last_dof_vel[:] = self.robot_data.dof_vel[:]
+        self.robot_data.last_root_vel[:] = self.robot_data.root_state[:, 7:13]
+
         # self._draw_debug_vis()
         return self.robot_data.obs, self.reward_buf, self.robot_data.reset_buf, self.robot_data.extras
 
@@ -193,6 +198,7 @@ class ManagerBasedRLEnv:
         self.robot_data.extras["log"].update(info)
         info = self.obs_manager.reset(env_ids)
         self.robot_data.extras["log"].update(info)
+        self.robot_data.extras["time_outs"] = self.termination_manager.time_out # for bootstrapping
         self._reset_robots(env_ids)
 
     def _reset_robots(self, env_ids):
@@ -222,13 +228,13 @@ class ManagerBasedRLEnv:
         """ Adds a heightfield terrain to the simulation, sets parameters based on the cfg.
         """
         hf_params = gymapi.HeightFieldParams()
-        hf_params.column_scale = self.terrain.cfg.horizontal_scale
-        hf_params.row_scale = self.terrain.cfg.horizontal_scale
-        hf_params.vertical_scale = self.terrain.cfg.vertical_scale
-        hf_params.nbRows = self.terrain.tot_cols
-        hf_params.nbColumns = self.terrain.tot_rows
-        hf_params.transform.p.x = -self.terrain.cfg.border_size
-        hf_params.transform.p.y = -self.terrain.cfg.border_size
+        hf_params.column_scale = self.sim_data.terrain.horizontal_scale
+        hf_params.row_scale = self.sim_data.terrain.horizontal_scale
+        hf_params.vertical_scale = self.sim_data.terrain.vertical_scale
+        hf_params.nbRows = self.sim_data.terrain.tot_cols
+        hf_params.nbColumns = self.sim_data.terrain.tot_rows
+        hf_params.transform.p.x = -self.sim_data.terrain.cfg.border_size
+        hf_params.transform.p.y = -self.sim_data.terrain.cfg.border_size
         hf_params.transform.p.z = 0.0
         hf_params.static_friction = self.sim_data.terrain.static_friction
         hf_params.dynamic_friction = self.sim_data.terrain.dynamic_friction
@@ -314,7 +320,7 @@ class ManagerBasedRLEnv:
             # create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.sim_data.num_envs)))
             pos = self.env_origins[i].clone()
-            pos[:2] += torch_rand_float(-1., 1., (2,1), device=self.sim_data.device).squeeze(1)
+            pos[2] += self.sim_data.init_state.pos[2]
             start_pose.p = gymapi.Vec3(*pos)
 
             robot_handle = self.gym.create_actor(env_handle, self.robot_asset, start_pose, "robot", i,
@@ -371,7 +377,7 @@ class ManagerBasedRLEnv:
             spacing = self.sim_data.terrain.env_spacing
             self.env_origins[:, 0] = spacing * xx.flatten()[:self.sim_data.num_envs]
             self.env_origins[:, 1] = spacing * yy.flatten()[:self.sim_data.num_envs]
-            self.env_origins[:, 2] = 0.
+            self.env_origins[:, 2] = 0.0
 
     # ---------- viewer function ----------
     def render_gui(self, sync_frame_time=True):
@@ -449,3 +455,7 @@ class ManagerBasedRLEnv:
         cam_pos = gymapi.Vec3(*pos)
         cam_target = gymapi.Vec3(*lookat)
         self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
+
+    # ---------- helper function -----------
+    def get_observations(self):
+        return self.robot_data.obs

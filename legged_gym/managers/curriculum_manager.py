@@ -1,2 +1,0 @@
-class CurriculumManager:
-    pass

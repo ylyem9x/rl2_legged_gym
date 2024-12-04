@@ -52,9 +52,9 @@ class CommandManager:
         term: CommandTerm
         dim = 0
         for term in self.terms:
-            this_cmd = self.robot_data.command[:, dim: term.dim + dim]
+            this_cmd = self.robot_data.command[:, dim: term.dim + dim].clone()
             self.robot_data.command[:, dim: term.dim + dim] = term.func(self.sim_data, self.robot_data,
-                                                                        this_cmd, term.cfg)
+                                                                        this_cmd, term.cfg).clone()
             dim += term.dim
 
 

@@ -9,18 +9,31 @@ from legged_gym.envs.base import *
 
 
 class Reward:
-    tracking_lin_vel = RewardTerm(basic_reward.tracking_lin_vel, 1.0, {"sigma":0.25})
+    # live = RewardTerm(basic_reward.live, 0.5)
+    tracking_lin_vel = RewardTerm(basic_reward.tracking_lin_vel, 1.5, {"sigma":0.25})
     tracking_ang_vel = RewardTerm(basic_reward.tracking_ang_vel, 0.5, {"sigma":0.25})
-    lin_vel_z = RewardTerm(basic_reward.lin_vel_z, -1.0)
+    lin_vel_z = RewardTerm(basic_reward.lin_vel_z, -2.0)
     ang_vel_xy = RewardTerm(basic_reward.ang_vel_xy, -0.05)
+    orientation = RewardTerm(basic_reward.orientation, -0.2)
+    dof_acc = RewardTerm(basic_reward.dof_acc, -1e-7)
+    joint_power = RewardTerm(basic_reward.joint_power, -2e-5)
+    base_height = RewardTerm(basic_reward.base_height, -1.0, {"height_target": 0.35})
+    action_rate = RewardTerm(basic_reward.action_rate, -0.01)
+    collision = RewardTerm(basic_reward.collision, -0.1)
 
-ang_vel = ObservationTerm(basic_obs.base_ang_vel, noise=noise.uniform_noise(0.9, 1.1, "scale"), scale=0.25)
-dof_pos = ObservationTerm(basic_obs.dof_pos, noise=noise.uniform_noise(0.9, 1.1, "scale"), scale=1.0)
-lin_vel = ObservationTerm(basic_obs.base_lin_vel, noise=noise.uniform_noise(0.9, 1.1, "scale"), scale=0.25)
-cmd = ObservationTerm(basic_obs.command, scale = 1.0)
+ang_vel = ObservationTerm(basic_obs.base_ang_vel, noise = noise.uniform_noise(), scale=0.25)
+dof_pos = ObservationTerm(basic_obs.dof_pos, noise = noise.uniform_noise(), scale=1.0)
+dof_vel = ObservationTerm(basic_obs.dof_vel, noise = noise.uniform_noise(), scale=0.05)
+action = ObservationTerm(basic_obs.action, scale=1.0)
+proj_gravity = ObservationTerm(basic_obs.projected_gravity, noise = noise.uniform_noise(), scale=1.0)
+lin_vel = ObservationTerm(basic_obs.base_lin_vel, scale=1.0)
+cmd = ObservationTerm(basic_obs.command, scale = torch.tensor([2.0, 2.0, 0.25], device="cuda:0"))
+obs_his = ObservationTerm(basic_obs.obs_history, scale = 1.0, cfg={"num_his":6,"num_obs":45})
 class Observation:
-    obs = ObservationGroup(ang_vel, cmd)
-    priv_obs = ObservationGroup(lin_vel)
+    obs = ObservationGroup(dof_pos, dof_vel, ang_vel, cmd, proj_gravity, action)
+    privileged_obs = ObservationGroup(lin_vel)
+    obs_history = ObservationGroup(obs_his)
+    base_vel = ObservationGroup(lin_vel)
 
 class Event:
     reset_dof = EventTerm(basic_event.reset_dof, mode="reset", cfg={"limit":(0.5, 1.5)})
@@ -30,19 +43,19 @@ class Event:
 
 class Termination:
     time_out = TerminationTerm(basic_termination.time_out,time_out=True)
-    contact = TerminationTerm(basic_termination.contact, time_out=False, cfg={"contact_offset":100.})
+    random = TerminationTerm(basic_termination.random_time_out, time_out=True, cfg={"probability":0.02})
+    contact = TerminationTerm(basic_termination.contact, time_out=False, cfg={"contact_offset":10.})
 
 class Action:
-    actionscale = ActionSacleTerm(1.0,100.0)
+    actionscale = ActionSacleTerm(0.25,10.0)
     actioncompute = ActionComputeTerm(control_type="P", kp = 20.0, kd = 0.5)
 
 class Command:
-    cmd = CommandTerm(vel3_command.dim, vel3_command.resample, vel3_command.curriculum_reset,cfg={
-        "interval": 2,
-        "command_range_x": (-1.0, 1.0),
-        "command_range_y": (-1.0, 1.0),
-        "command_range_yaw": (-1.0, 1.0),
-        "dv": 0.2
+    cmd = CommandTerm(vel3_command.dim, vel3_command.resample, vel3_command.fixed_reset,cfg={
+        "interval": 15,
+        "command_range_x": [-1.0, 1.0],
+        "command_range_y": [-0.5, 0.5],
+        "command_range_yaw": [-1.0, 1.0]
     })
 
 cfg = ManagerBasedRLEnvCfg()
