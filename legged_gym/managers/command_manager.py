@@ -52,18 +52,20 @@ class CommandManager:
         term: CommandTerm
         dim = 0
         for term in self.terms:
-            this_cmd = self.robot_data.command[:, dim: term.dim + dim].clone()
-            self.robot_data.command[:, dim: term.dim + dim] = term.func(self.sim_data, self.robot_data,
-                                                                        this_cmd, term.cfg).clone()
+            this_cmd = self.robot_data.command[:, dim: term.dim + dim]
+            term.func(self.sim_data, self.robot_data, this_cmd, term.cfg)
             dim += term.dim
 
 
     def reset(self, env_ids) -> Dict[str, torch.Tensor]:
         term: CommandTerm
         extras = dict()
+        dim = 0
         for term in self.terms:
-            info = term.reset(self.sim_data, self.robot_data, env_ids, term.cfg)
+            this_cmd = self.robot_data.command[:, dim: term.dim + dim]
+            info = term.reset(self.sim_data, self.robot_data, this_cmd, env_ids, term.cfg)
             extras.update(info)
+            dim += term.dim
         return extras
 
     """

@@ -24,6 +24,30 @@ class basic_obs:
     def action(sim_data:SimData, robot_data:RobotData, cfg:dict):
         return robot_data.action
 
+    def p_gain(sim_data:SimData, robot_data:RobotData, cfg:dict):
+        return robot_data.p_gain
+
+    def d_gain(sim_data:SimData, robot_data:RobotData, cfg:dict):
+        return robot_data.d_gain
+
+    def motor_offset(sim_data:SimData, robot_data:RobotData, cfg:dict):
+        return robot_data.motor_offset
+
+    def motor_strength(sim_data:SimData, robot_data:RobotData, cfg:dict):
+        return robot_data.motor_strength
+
+    def base_mass(sim_data:SimData, robot_data:RobotData, cfg:dict):
+        return robot_data.payloads
+
+    def com_displacement(sim_data:SimData, robot_data:RobotData, cfg:dict):
+        return robot_data.com_displacement
+
+    def friction(sim_data:SimData, robot_data:RobotData, cfg:dict):
+        return robot_data.friction
+
+    def restitution(sim_data:SimData, robot_data:RobotData, cfg:dict):
+        return robot_data.restitution
+
     def obs_history(sim_data:SimData, robot_data:RobotData, cfg:dict):
         num_his = cfg.get("num_his", 1)
         num_obs = cfg.get("num_obs")
@@ -40,3 +64,8 @@ class basic_obs:
         if len(reset_env_ids) > 0:
             robot_data.obs_his[reset_env_ids, :] = 0
         return robot_data.obs_his
+
+    def measure_height(sim_data:SimData, robot_data:RobotData, cfg:dict):
+        offset = cfg.get("offset", 0.3)
+        heights = robot_data.root_state[:, 2].unsqueeze(1) - robot_data.measured_height - offset
+        return heights

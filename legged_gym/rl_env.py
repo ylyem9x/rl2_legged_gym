@@ -13,10 +13,10 @@ from typing import Tuple, Dict
 
 from legged_gym.data import SimData, RobotData
 from legged_gym.rl_env_cfg import ManagerBasedRLEnvCfg
-# from legged_gym.utils.terrain import Terrain
 from legged_gym.managers import RewardManager, TerminationManager, CommandManager, \
-                                EventManager, ObservationManager, ActionManager, CurriculumManager
-from legged_gym.utils.helpers import class_to_dict
+                                EventManager, ObservationManager, ActionManager
+from legged_gym.utils import class_to_dict, torch_rand, init_height_point, get_height
+from legged_gym.utils.terrain import Terrain
 
 class ManagerBasedRLEnv:
     def __init__(self, cfg: ManagerBasedRLEnvCfg):
@@ -33,10 +33,11 @@ class ManagerBasedRLEnv:
 
         self._init_buffers()
         self._load_manager()
-        self.reset(torch.arange(0, self.sim_data.num_envs, device=self.sim_data.device))
         self.step(self.robot_data.action) # init some nums
+        self.reset(torch.arange(0, self.sim_data.num_envs, device=self.sim_data.device))
 
     def create_sim(self):
+        self.sim_data.sim.dt = self.sim_data.dt / self.sim_data.decimation
         sim_cfg = {"sim":class_to_dict(self.sim_data.sim)}
         self.sim_params = gymapi.SimParams()
         gymutil.parse_sim_config(sim_cfg["sim"], self.sim_params)
@@ -47,8 +48,8 @@ class ManagerBasedRLEnv:
             self.graphics_device_id = self.sim_device_id
         self.sim = self.gym.create_sim(self.sim_device_id, self.graphics_device_id, gymapi.SIM_PHYSX, self.sim_params)
         mesh_type = self.sim_data.terrain.mesh_type
-        # if mesh_type in ['heightfield', 'trimesh']:
-        #     self.terrain = Terrain(self.sim_data.terrain, self.sim_data.num_envs)
+        if mesh_type in ['heightfield', 'trimesh']:
+            self.terrain: Terrain = self.cfg.terrain
         if mesh_type=='plane':
             self._create_ground_plane()
         elif mesh_type=='heightfield':
@@ -75,31 +76,35 @@ class ManagerBasedRLEnv:
         self.dof_pos = self.dof_state.view(self.sim_data.num_envs, self.sim_data.num_dofs, 2)[..., 0]
         self.dof_vel = self.dof_state.view(self.sim_data.num_envs, self.sim_data.num_dofs, 2)[..., 1]
         self.base_quat = self.root_state[:, 3:7]
-
         self.contact_force = gymtorch.wrap_tensor(net_contact_force).view(self.sim_data.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
         self.rigid_body_state = gymtorch.wrap_tensor(rigid_body_state)[:self.sim_data.num_envs * self.num_bodies, :]
 
-        gym_tensor = (self.root_state, self.dof_state, self.dof_pos, self.dof_vel, self.base_quat, self.contact_force, self.rigid_body_state)
-        gym_env = (self.gym, self.robot_asset, self.envs, self.actor_handles)
+        gym_tensor = (self.root_state, self.dof_state, self.dof_pos, self.dof_vel, self.base_quat, self.contact_force, self.rigid_body_state) # for
+        gym_env = (self.sim, self.gym, self.robot_asset, self.envs, self.actor_handles)
+        robot_data_terms = self.cfg.robot_data_terms
         extra_gym_info = dict()
         extra_gym_info["base_init_state"] = self.base_init_state
         extra_gym_info["env_origins"] = self.env_origins
-        self.robot_data = RobotData(self.sim_data, gym_tensor, gym_env, extra_gym_info)
+        extra_gym_info["height_sample"] = self.height_sample
+        if hasattr(self, "terrain"):
+            extra_gym_info["terrain"] = self.terrain
+        self.robot_data = RobotData(self.sim_data, gym_tensor, gym_env, extra_gym_info, robot_data_terms)
+        self.robot_data.init_term()
 
     def _load_manager(self):
         self.event_manager = EventManager(self.cfg.event, self.sim_data, self.robot_data)
-        print("[INFO] event Manager: ", self.event_manager)
         self.termination_manager = TerminationManager(self.cfg.termination, self.sim_data, self.robot_data)
-        print("[INFO] termination Manager: ", self.termination_manager)
         self.command_manager = CommandManager(self.cfg.command, self.sim_data, self.robot_data)
-        print("[INFO] command Manager: ", self.command_manager)
         self.obs_manager = ObservationManager(self.cfg.obs, self.sim_data, self.robot_data)
-        print("[INFO] observation Manager: ", self.obs_manager)
         self.action_manager = ActionManager(self.cfg.action, self.sim_data, self.robot_data)
-        print("[INFO] action Manager: ", self.action_manager)
         self.reward_manager = RewardManager(self.cfg.reward, self.sim_data, self.robot_data)
-        print("[INFO] Reward Manager: ", self.reward_manager)
-
+        if self.cfg.print_manager:
+            print("[INFO] event Manager: ", self.event_manager)
+            print("[INFO] termination Manager: ", self.termination_manager)
+            print("[INFO] command Manager: ", self.command_manager)
+            print("[INFO] observation Manager: ", self.obs_manager)
+            print("[INFO] action Manager: ", self.action_manager)
+            print("[INFO] Reward Manager: ", self.reward_manager)
         # apply startup term in event manager
         self.event_manager.apply_startup_terms()
 
@@ -124,68 +129,55 @@ class ManagerBasedRLEnv:
         self.robot_data.action = self.action_manager.process_action(action.to(self.sim_data.device))
         # step physics and render each frame
         self.render_gui()
-
         # perform physics stepping
         for _ in range(self.sim_data.decimation):
             self.robot_data.torque = self.action_manager.compute_torque(self.robot_data.action).float()
             self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.robot_data.torque))
+            self.event_manager.apply_decimation_terms()
             self.gym.simulate(self.sim)
             if self.sim_data.device == 'cpu':
                 self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
-
-        # -- post physics step
+        # post physics step
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
-
-        # -- update env counters
+        # update env counters
         self.robot_data.episode_length_buf += 1  # step in current episode (per env)
         self.robot_data.common_step_counter += 1  # total step (common for all envs)
-
         # prepare quantities
         self.robot_data.base_quat[:] = self.robot_data.root_state[:, 3:7]
         self.robot_data.base_lin_vel[:] = quat_rotate_inverse(self.robot_data.base_quat, self.robot_data.root_state[:, 7:10])
         self.robot_data.base_ang_vel[:] = quat_rotate_inverse(self.robot_data.base_quat, self.robot_data.root_state[:, 10:13])
         self.robot_data.projected_gravity[:] = quat_rotate_inverse(self.robot_data.base_quat, self.robot_data.gravity_vec)
-
-        """
-        Post physics step callback
-        """
-
-        # -- check terminations
+        self.robot_data.measured_height = get_height(self.sim_data, self.robot_data, self.robot_data.height_point)
+        self.robot_data.compute_term()
+        # check terminations
         self.robot_data.reset_buf = self.termination_manager.compute()
         self.robot_data.reset_terminated = self.termination_manager.terminated
         self.robot_data.reset_time_out = self.termination_manager.time_out
-
-        # -- reward computation
+        # reward computation
         self.reward_buf = self.reward_manager.compute()
-
-        # -- reset envs that terminated/timed-out and log the episode information
-        reset_env_ids = self.robot_data.reset_buf.nonzero(as_tuple=False).squeeze(-1)
-        if len(reset_env_ids) > 0:
-            self.reset(reset_env_ids)
-
-        # -- update command
+        # reset envs that terminated/timed-out and log the episode information
+        self.robot_data.reset_env_ids = self.robot_data.reset_buf.nonzero(as_tuple=False).squeeze(-1)
+        if len(self.robot_data.reset_env_ids) > 0:
+            self.reset(self.robot_data.reset_env_ids)
+        # update command
         self.command_manager.apply()
-
-        # -- step interval&tirgger events
+        # step interval&tirgger events
         self.event_manager.apply()
-
-        # -- compute observations
-        # note: done after reset to get the correct observations for reset envs
-        self.robot_data.obs = self.obs_manager.compute()
-
+        # compute observations
+        self.robot_data.obs = self.obs_manager.compute()# note: done after reset to get the correct observations for reset envs
         # post perpare quantities
         self.robot_data.last_action[:] = self.robot_data.action[:]
         self.robot_data.last_dof_vel[:] = self.robot_data.dof_vel[:]
         self.robot_data.last_root_vel[:] = self.robot_data.root_state[:, 7:13]
-
         # self._draw_debug_vis()
         return self.robot_data.obs, self.reward_buf, self.robot_data.reset_buf, self.robot_data.extras
 
     def reset(self, env_ids):
-        # self.curriculum_manager.compute(env_idx = env_idx)
         self.robot_data.extras["log"] = dict()
+        info = self.robot_data.reset_term(env_ids)
+        self.robot_data.extras["log"].update(info)
         info = self.reward_manager.reset(env_ids)
         self.robot_data.extras["log"].update(info)
         info = self.command_manager.reset(env_ids) # after reward
@@ -221,30 +213,28 @@ class ManagerBasedRLEnv:
         plane_params.dynamic_friction = self.sim_data.terrain.dynamic_friction
         plane_params.restitution = self.sim_data.terrain.restitution
         self.gym.add_ground(self.sim, plane_params)
-        # self.height_samples = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows,
-        #                                                                     self.terrain.tot_cols).to(self.device)
+        self.height_sample = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows,
+                                                                            self.terrain.tot_cols).to(self.device)
 
     def _create_heightfield(self):
         """ Adds a heightfield terrain to the simulation, sets parameters based on the cfg.
         """
         hf_params = gymapi.HeightFieldParams()
-        hf_params.column_scale = self.sim_data.terrain.horizontal_scale
-        hf_params.row_scale = self.sim_data.terrain.horizontal_scale
-        hf_params.vertical_scale = self.sim_data.terrain.vertical_scale
-        hf_params.nbRows = self.sim_data.terrain.tot_cols
-        hf_params.nbColumns = self.sim_data.terrain.tot_rows
-        hf_params.transform.p.x = -self.sim_data.terrain.cfg.border_size
-        hf_params.transform.p.y = -self.sim_data.terrain.cfg.border_size
+        hf_params.column_scale = self.terrain.cfg.horizontal_scale
+        hf_params.row_scale = self.terrain.cfg.horizontal_scale
+        hf_params.vertical_scale = self.terrain.cfg.vertical_scale
+        hf_params.nbRows = self.terrain.tot_cols
+        hf_params.nbColumns = self.terrain.tot_rows
+        hf_params.transform.p.x = -self.terrain.cfg.border_size
+        hf_params.transform.p.y = -self.terrain.cfg.border_size
         hf_params.transform.p.z = 0.0
-        hf_params.static_friction = self.sim_data.terrain.static_friction
-        hf_params.dynamic_friction = self.sim_data.terrain.dynamic_friction
-        hf_params.restitution = self.sim_data.terrain.restitution
-
-        print(self.terrain.heightsamples.shape, hf_params.nbRows, hf_params.nbColumns)
-
+        hf_params.static_friction = self.terrain.cfg.static_friction
+        hf_params.dynamic_friction = self.terrain.cfg.dynamic_friction
+        hf_params.restitution = self.terrain.cfg.restitution
+        # print(self.terrain.heightsamples.shape, hf_params.nbRows, hf_params.nbColumns)
         self.gym.add_heightfield(self.sim, self.terrain.heightsamples.T, hf_params)
-        self.height_samples = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows,
-                                                                            self.terrain.tot_cols).to(self.device)
+        self.height_sample = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows,
+                                                                            self.terrain.tot_cols).to(self.sim_data.device)
 
     def _create_trimesh(self):
         """ Adds a triangle mesh terrain to the simulation, sets parameters based on the cfg.
@@ -252,17 +242,16 @@ class ManagerBasedRLEnv:
         tm_params = gymapi.TriangleMeshParams()
         tm_params.nb_vertices = self.terrain.vertices.shape[0]
         tm_params.nb_triangles = self.terrain.triangles.shape[0]
-
         tm_params.transform.p.x = -self.terrain.cfg.border_size
         tm_params.transform.p.y = -self.terrain.cfg.border_size
         tm_params.transform.p.z = 0.0
-        tm_params.static_friction = self.sim_data.terrain.static_friction
-        tm_params.dynamic_friction = self.sim_data.terrain.dynamic_friction
-        tm_params.restitution = self.sim_data.terrain.restitution
+        tm_params.static_friction = self.terrain.cfg.static_friction
+        tm_params.dynamic_friction = self.terrain.cfg.dynamic_friction
+        tm_params.restitution = self.terrain.cfg.restitution
         self.gym.add_triangle_mesh(self.sim, self.terrain.vertices.flatten(order='C'),
                                    self.terrain.triangles.flatten(order='C'), tm_params)
-        self.height_samples = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows,
-                                                                            self.terrain.tot_cols).to(self.device)
+        self.height_sample = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows,
+                                                                            self.terrain.tot_cols).to(self.sim_data.device)
 
     def _create_envs(self):
         """ Creates environments:
@@ -299,7 +288,7 @@ class ManagerBasedRLEnv:
         self.sim_data.num_dofs = self.num_dofs
         self.sim_data.num_bodies = self.num_bodies
         if self.num_dofs != self.sim_data.num_actions:
-            print(f"[WARNING]Action num is {self.sim_data.num_actions} != Dof num is {self.num_dof}.")
+            print(f"[WARNING]Action num is {self.sim_data.num_actions} != Dof num is {self.sim_data.num_dofs}.")
 
         # save body names from the asset
         body_names = self.gym.get_asset_rigid_body_names(self.robot_asset)
@@ -321,13 +310,11 @@ class ManagerBasedRLEnv:
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.sim_data.num_envs)))
             pos = self.env_origins[i].clone()
             pos[2] += self.sim_data.init_state.pos[2]
+            if self.terrain != None:
+                pos[:2] += torch_rand(-1., 1., (2,1), device=self.sim_data.device).squeeze(1)
             start_pose.p = gymapi.Vec3(*pos)
-
             robot_handle = self.gym.create_actor(env_handle, self.robot_asset, start_pose, "robot", i,
                                                   self.sim_data.asset.self_collisions, 0)
-            # dof_props = self._process_dof_props(dof_props_asset, i)
-            # self.gym.set_actor_dof_properties(env_handle, robot_handle, dof_props)
-            body_props = self.gym.get_actor_rigid_body_properties(env_handle, robot_handle)
             self.envs.append(env_handle)
             self.actor_handles.append(robot_handle)
 
@@ -356,17 +343,13 @@ class ManagerBasedRLEnv:
             Otherwise create a grid.
         """
         if self.sim_data.terrain.mesh_type in ["heightfield", "trimesh"]:
-            # self.custom_origins = True
-            # self.env_origins = torch.zeros(self.sim_data.num_envs, 3, device=self.sim_data.device, requires_grad=False)
-            # # put robots at the origins defined by the terrain
-            # max_init_level = self.sim_data.terrain.max_init_terrain_level
-            # if not self.sim_data.terrain.curriculum: max_init_level = self.sim_data.terrain.num_rows - 1
-            # self.terrain_levels = torch.randint(0, max_init_level+1, (self.sim_data.num_envs,), device=self.sim_data.device)
-            # self.terrain_types = torch.div(torch.arange(self.num_envs, device=self.device), (self.num_envs/self.cfg.terrain.num_cols), rounding_mode='floor').to(torch.long)
-            # self.max_terrain_level = self.cfg.terrain.num_rows
-            # self.terrain_origins = torch.from_numpy(self.terrain.env_origins).to(self.device).to(torch.float)
-            # self.env_origins[:] = self.terrain_origins[self.terrain_levels, self.terrain_types]
-            pass
+            self.custom_origins = True
+            self.env_origins = torch.zeros(self.sim_data.num_envs, 3, device=self.sim_data.device, requires_grad=False)
+            # put robots at the origins defined by the terrain
+            terrain_origins = torch.from_numpy(self.terrain.env_origins).to(self.sim_data.device).to(torch.float)
+            terrain_levels = torch.from_numpy(self.terrain.terrain_levels).to(self.sim_data.device).to(torch.long)
+            terrain_types = torch.from_numpy(self.terrain.terrain_types).to(self.sim_data.device).to(torch.long)
+            self.env_origins[:] = terrain_origins[terrain_levels, terrain_types]
         else:
             self.custom_origins = False
             self.env_origins = torch.zeros(self.sim_data.num_envs, 3, device=self.sim_data.device, requires_grad=False)
@@ -456,6 +439,6 @@ class ManagerBasedRLEnv:
         cam_target = gymapi.Vec3(*lookat)
         self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
 
-    # ---------- helper function -----------
+    # ---------- property function -----------
     def get_observations(self):
         return self.robot_data.obs

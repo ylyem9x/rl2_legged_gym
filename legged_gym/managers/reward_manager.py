@@ -78,7 +78,7 @@ class RewardManager:
                 if weight == 0.0:
                     continue
                 # compute term's value
-                value = func(self.sim_data, self.robot_data, args) * weight * self.sim_data.sim.dt
+                value = func(self.sim_data, self.robot_data, args) * weight * self.sim_data.dt
                 # update total reward
                 self._reward_buf += value
                 # update episodic sum

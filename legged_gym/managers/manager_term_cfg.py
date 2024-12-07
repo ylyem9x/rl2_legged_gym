@@ -54,11 +54,11 @@ class ActionSacleTerm:
 class ActionComputeTerm:
     def __init__(self, control_type, kp = None, kd = None, lag = 1, func = None):
         """
-        control_type: "P", "T", "other"
-
-        if "P", kp/kd is needed
-
-        if "other", func is needed. Func's args: (sim_data, robot_data, action_scaled). return torques: torch.Tensor
+        Args:
+            control_type: "P", "T", "other"
+            kp,kd: needed when "P"
+            lag: length of lag buffer, lagtime = length * dt / decimation
+            func: needed when "other". Func's args: (sim_data, robot_data, action_scaled). return torques: torch.Tensor
         """
         self.control_type = control_type
         self.kp = kp
@@ -84,18 +84,11 @@ class ObservationGroup:
 
 # ---------- Event Manager Term ----------
 class EventTerm:
-    def __init__(self, func, mode, interval = {"global":15, "local":-1}, trigger = None, cfg = dict()):
+    def __init__(self, func, mode, interval = {"global":15}, cfg = dict()):
         self.func = func
-        self.mode = mode # "startup", "reset", "interval", "trigger"
-        self.interval = interval
-        self.trigger = trigger
+        self.mode = mode # "startup", "reset", "interval", "decimation"
+        self.interval = interval # "global", "local"
         self.cfg = cfg # for interval: global for all env, local will input env_ids
-
-# ---------- Curriculum Manager Term ----------
-class CurriculumTerm:
-    def __init__(self, func, cfg = dict()):
-        self.func = func
-        self.cfg = cfg
 
 # ---------- Command Manager Term -----------
 class CommandTerm:
@@ -104,3 +97,11 @@ class CommandTerm:
         self.func = func # every dt, keep or resample
         self.reset = reset # reset extras, can apply curriculum
         self.cfg = cfg
+
+# ---------- Robot Data Term -----------
+class RobotDataTerm:
+    def __init__(self, name, init, compute=None, reset=None):
+        self.name = name
+        self.init = init
+        self.compute = compute # only data from sim is refreshed
+        self.reset = reset

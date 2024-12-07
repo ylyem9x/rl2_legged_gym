@@ -40,7 +40,7 @@ class EventManager:
         self.startup_terms = []
         self.reset_terms = []
         self.interval_terms = []
-        self.trigger_terms = []
+        self.decimation_terms = []
         self._prepare_terms()
 
     def __str__(self) -> str:
@@ -61,26 +61,29 @@ class EventManager:
         for i in range(len(self.interval_terms)):
             term: EventTerm = self.interval_terms[i]
             table.add_row([term.func.__name__, f"inteval:{term.interval}", term.cfg])
-        for i in range(len(self.trigger_terms)):
-            term: EventTerm = self.trigger_terms[i]
-            table.add_row([term.func.__name__, "trigger", term.cfg])
+        for i in range(len(self.decimation_terms)):
+            term: EventTerm = self.decimation_terms[i]
+            table.add_row([term.func.__name__, "decimation", term.cfg])
         # convert table to string
         msg += table.get_string()
         msg += "\n"
         return msg
 
-    def apply(self):
-        """apply trigger terms and interval terms"""
+    def apply_decimation_terms(self):
         term: EventTerm
-        for term in self.trigger_terms:
-            ids = term.trigger(self.sim_data, self.robot_data)
-            term.func(self.sim_data, self.robot_data, ids, term.cfg)
+        for term in self.decimation_terms:
+            term.func(self.sim_data, self.robot_data, term.cfg)
+
+    def apply(self):
+        """apply interval terms"""
+        term: EventTerm
         for term in self.interval_terms:
             if "global" in term.interval:
-                if self.robot_data.common_step_counter % int(term.interval["global"] / self.sim_data.sim.dt) == 0:
+                t = int(term.interval["global"] / self.sim_data.dt)
+                if self.robot_data.common_step_counter % t == 0:
                     term.func(self.sim_data, self.robot_data, term.cfg)
             elif "local" in term.interval:
-                interval = int(term.interval["local"] / self.sim_data.sim.dt)
+                interval = int(term.interval["local"] / self.sim_data.dt)
                 env_ids = (self.robot_data.episode_length_buf % interval == 0).nonzero(as_tuple=False).squeeze(-1)
                 if len(env_ids) > 0:
                     term.func(self.sim_data, self.robot_data, env_ids, term.cfg)
@@ -92,10 +95,12 @@ class EventManager:
             term.func(self.sim_data, self.robot_data, term.cfg)
 
     def reset(self, env_ids) -> Dict[str, torch.Tensor]:
+        extras = dict()
         for i in range(len(self.reset_terms)):
             term: EventTerm = self.reset_terms[i]
-            term.func(self.sim_data, self.robot_data, env_ids, term.cfg)
-        return {}
+            info = term.func(self.sim_data, self.robot_data, env_ids, term.cfg)
+            extras.update(info)
+        return extras
 
     """
     Helper functions.
@@ -120,7 +125,7 @@ class EventManager:
                 self.reset_terms.append(term)
             elif mode == "interval":
                 self.interval_terms.append(term)
-            elif mode == "trigger":
-                self.trigger_terms.append(term)
+            elif mode == "decimation":
+                self.decimation_terms.append(term)
             else:
-                raise ValueError(f"Wrong mode value, expected startup/reset/interval/trigger, but recevied f{mode}")
+                raise ValueError(f"Wrong mode value, expected startup/reset/interval/decimation, but recevied f{mode}")

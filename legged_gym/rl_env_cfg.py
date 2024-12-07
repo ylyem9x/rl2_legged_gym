@@ -4,7 +4,8 @@ from legged_gym.managers.manager_term_cfg import *
 
 class ManagerBasedRLEnvCfg:
     sim_data = SimData()
-    # robot_data: RobotData = None
+    robot_data_terms = []
+    print_manager = True
     reward = None
     termination = None
     command = None
@@ -12,3 +13,4 @@ class ManagerBasedRLEnvCfg:
     obs = None
     action = None
     curriculum = None
+    terrain = None

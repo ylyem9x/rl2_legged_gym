@@ -30,7 +30,7 @@ class BasicCfg:
         observe_imu = True
 
         # ---------- Privileged Observations ----------
-        num_privileged_obs = 2
+        num_privileged_obs = 17*11 + 3
         # privileged_future_horizon = 1
         priv_observe_friction = True
         priv_observe_friction_indep = False # not implemented
@@ -540,13 +540,13 @@ class BasicRunnerCfg:
         contrastive_loss_coef = 1.0
         use_clipped_value_loss = True
         clip_param = 0.2
-        entropy_coef = 0.02
+        entropy_coef = 0.015
         num_learning_epochs = 5
         num_mini_batches = 4  # mini batch size = num_envs*nsteps / nminibatches
         learning_rate = 1.e-3 # 5.e-4
         adaptation_module_learning_rate = 5.e-4
         num_adaptation_module_substeps = 5
-        schedule = 'adaptive'  # could be adaptive, fixed
+        schedule = 'fixed'  # could be adaptive, fixed
         gamma = 0.99
         lam = 0.95
         desired_kl = 0.02

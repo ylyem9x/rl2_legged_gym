@@ -36,7 +36,7 @@ class OnPolicyRunner:
         self.step =[]
         self.cv = 1
         self.env.num_obs = 45
-        self.env.num_privileged_obs = 3
+        self.env.num_privileged_obs = 17*11 + 3
         self.env.num_actions = 12
         self.env.num_envs = 4096
 

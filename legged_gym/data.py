@@ -8,7 +8,8 @@ import torch
 from torch import Tensor
 from typing import Tuple, Dict
 
-from legged_gym.utils.helpers import get_body_indices, get_default_pos
+from legged_gym.utils import get_body_indices, get_default_pos, init_height_point
+from legged_gym.utils.warpper import RobotDataWarpper
 
 """contain all tensor and array that need
 """
@@ -19,7 +20,7 @@ class SimData:
     class sim:
         """will be parse into gymapi.simParams()"""
         use_gpu_pipeline = True
-        dt =  0.005
+        dt =  0.005 # will be overwrite
         substeps = 1
         gravity = [0., 0. ,-9.81]  # [m/s^2]
         up_axis = 1  # 0 is y, 1 is z
@@ -48,33 +49,33 @@ class SimData:
         env_spacing = 3.0 # only in plane
         horizontal_scale = 0.1 # [m]
         vertical_scale = 0.005 # [m]
-        # border_size = 25 # [m]
-        # curriculum = True
+        border_size = 25 # [m]
+        curriculum = True
         static_friction = 1.0
         dynamic_friction = 1.0
         restitution = 0.
         # # rough terrain only:
-        # measure_heights = True
-        # measured_points_x = [-0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8] # 1mx1.6m rectangle (without center line)
-        # measured_points_y = [-0.5, -0.4, -0.3, -0.2, -0.1, 0., 0.1, 0.2, 0.3, 0.4, 0.5]
-        # selected = False # select a unique terrain type and pass all arguments
-        # terrain_kwargs = None # Dict of arguments for selected terrain
-        # max_init_terrain_level = 5 # starting curriculum state
-        # terrain_length = 8.
-        # terrain_width = 8.
-        # num_rows= 10 # number of terrain rows (levels)
-        # num_cols = 20 # number of terrain cols (types)
-        # # terrain types: [smooth slope, rough slope, stairs up, stairs down, discrete]
-        # terrain_proportions = [0.1, 0.1, 0.35, 0.25, 0.2]
+        measure_height = True
+        measured_points_x = np.linspace(-0.8,0.8,17).tolist() # 1mx1.6m rectangle (without center line)
+        measured_points_y = np.linspace(-0.5,0.5,11).tolist()
+        selected = False # select a unique terrain type and pass all arguments
+        terrain_kwargs = None # Dict of arguments for selected terrain
+        max_init_terrain_level = 5 # starting curriculum state
+        terrain_length = 8.
+        terrain_width = 8.
+        num_rows= 10 # number of terrain rows (levels)
+        num_cols = 20 # number of terrain cols (types)
+        # terrain types: [smooth slope, rough slope, stairs up, stairs down, discrete]
+        terrain_proportions = [0.1, 0.1, 0.35, 0.25, 0.2]
         # # trimesh only:
-        # slope_treshold = 0.75 # slopes above this threshold will be corrected to vertical surfaces
+        slope_treshold = 0.75 # slopes above this threshold will be corrected to vertical surfaces
 
     class asset:
         file = "resources/robots/go1/urdf/go1_v2.urdf"
         name = "go1"  # actor name
-        foot_name = "foot" # name of the feet bodies, used to index body state and contact force tensors
-        penalize_contacts_on = ["thigh", "calf","hip"]
-        terminate_after_contacts_on = ["base"]
+        foot_name = ["foot"] # name of the feet bodies, used to index body state and contact force tensors
+        penalize_contacts_on = ["thigh", "calf"]
+        terminate_after_contacts_on = ["base","hip"]
         disable_gravity = False
         collapse_fixed_joints = True # merge bodies connected by fixed joints. Specific fixed joints can be kept by adding " <... dont_collapse="true">
         fix_base_link = False # fixe the base of the robot
@@ -121,6 +122,7 @@ class SimData:
 
     up_axis_idx = 2 # 2 for z, 1 for y -> adapt gravity accordingly
     decimation = 4
+    dt = 0.02 # will be overwrite
 
     num_envs = 4096
     num_bodies = None # read from urdf
@@ -128,20 +130,21 @@ class SimData:
     num_actions = 12
     max_episode_length_s = 20
 
-
-
+@RobotDataWarpper
 class RobotData:
     """changeable in sim
     """
-    def __init__(self, sim_data: SimData, gym_tensor, gym_env, extra_gym_info):
+    def __init__(self, sim_data: SimData, gym_tensor, gym_env, extra_gym_info: dict, robot_data_terms):
         torch._C._jit_set_profiling_mode(False)
         torch._C._jit_set_profiling_executor(False)
-
+        self.robot_data_terms = robot_data_terms
+        self.sim_data = sim_data
         # update directly from gym
         self.root_state, self.dof_state, self.dof_pos, self.dof_vel, \
         self.base_quat, self.contact_force, self.rigid_body_state = gym_tensor
         self.gym_env = gym_env # (self.gym, self.robot_asset, self.envs, self.actor_handles)
-        self.extra_gym_info = extra_gym_info #
+        self.extra_gym_info = extra_gym_info
+        self.terrain = extra_gym_info.get("terrain", None)
 
         # fixed data
         self.gravity_vec = to_torch(get_axis_params(-1., sim_data.up_axis_idx), device=sim_data.device).repeat((sim_data.num_envs, 1))
@@ -179,21 +182,23 @@ class RobotData:
         self.command_range = None
 
         # # terrain
-        # if self.cfg.terrain.measure_heights:
-        #     self.height_points = self._init_height_points()
-        # self.measured_heights = 0
+        self.height_sample = extra_gym_info.get("height_sample", None)
+        self.height_point, self.num_height_points = init_height_point(self.sim_data.terrain.measured_points_x,
+                                                                      self.sim_data.terrain.measured_points_y,
+                                                                      self.sim_data)
+        self.measured_height = 0
 
         # reset
-        self.reset_buf = None
-        self.reset_terminated = None
-        self.reset_time_out = None
+        self.reset_buf = torch.zeros(sim_data.num_envs, device=sim_data.device, dtype=torch.bool)
+        self.reset_terminated = torch.zeros(sim_data.num_envs, device=sim_data.device, dtype=torch.bool)
+        self.reset_time_out = torch.zeros(sim_data.num_envs, device=sim_data.device, dtype=torch.bool)
+        self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
 
         # domain random
-        self.p_gain = 1.0
-        self.d_gain = 1.0
-        self.motor_offset = 0.0 # only on pd control
-        self.motor_strength = 1.0
-        self.noise_scale_vec = None
+        self.p_gain = torch.ones(sim_data.num_envs, 1, device=sim_data.device, dtype=torch.float)
+        self.d_gain = torch.ones(sim_data.num_envs, 1, device=sim_data.device, dtype=torch.float)
+        self.motor_offset = torch.zeros(sim_data.num_envs, 1, device=sim_data.device, dtype=torch.float) # only on pd control
+        self.motor_strength = torch.ones(sim_data.num_envs, 1, device=sim_data.device, dtype=torch.float)
 
         # obs
         self.obs = dict()

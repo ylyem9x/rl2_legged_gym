@@ -80,4 +80,4 @@ if __name__ == '__main__':
     env_cfg = EnvCfg()
     train_cfg = RunnerCfg()
     env, runner , env_cfg ,train_cfg = launch(args, path, env_cfg, train_cfg)
-    runner.learn(num_learning_iterations=1000)
+    runner.learn(num_learning_iterations=3000)
